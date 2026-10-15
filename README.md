@@ -15,11 +15,15 @@ A mouse-friendly terminal file manager with an Explorer-like layout, built with
 ## Install (Arch Linux)
 
 Requires a Nerd Font for icons. Download and install the package from the latest
-[release](https://github.com/Fanikalin/Files4Hyprland/releases/latest) in one command:
+[release](https://github.com/Fanikalin/Files4Hyprland/releases/latest):
 
 ```bash
-sudo pacman -U https://github.com/Fanikalin/Files4Hyprland/releases/download/v1.1.0/files4hyprland-1.1.0-1-any.pkg.tar.zst
+cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v1.1.1/files4hyprland-1.1.1-1-any.pkg.tar.zst
+sudo pacman -U ./files4hyprland-1.1.1-1-any.pkg.tar.zst
 ```
+
+(`pacman -U <url>` directly does not work because release packages are not GPG-signed, and pacman
+requires a `.sig` for remote files; installing a downloaded file is fine.)
 
 pacman resolves the dependencies (`python-textual`, `glib2`, `udisks2`, `xdg-utils`) from the official repos.
 **Files** then shows up in the application menu. To also make it the default folder handler,
@@ -34,7 +38,7 @@ Everything `files4hyprland-setup` adds is marked; `files4hyprland-setup --undo` 
 
 ### Updating
 
-Install the newer package the same way (`pacman -U <new release link>`), or build from the
+Download the newer package and install it the same way (`pacman -U ./file`), or build from the
 PKGBUILD in `packaging/` (works with AUR helpers, e.g. `yay -S files4hyprland` once published to the AUR).
 Maintainers: bump `pkgver` in `packaging/PKGBUILD`, commit, run `packaging/release.sh`.
 

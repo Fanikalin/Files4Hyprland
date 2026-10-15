@@ -29,12 +29,12 @@ done
 say() { [ "$QUIET" = 1 ] || echo "$@"; }
 
 add_block() {  # file snippet
-  grep -qF "$BEGIN" "$1" 2>/dev/null && return 0
+  grep -qF -- "$BEGIN" "$1" 2>/dev/null && return 0
   mkdir -p "$(dirname "$1")"
   { echo; echo "$BEGIN"; cat "$2"; echo "$END"; } >> "$1"
 }
 del_block() {  # file
-  [ -f "$1" ] && grep -qF "$BEGIN" "$1" && sed -i "\#^$BEGIN#,\#^$END#d" "$1" || true
+  [ -f "$1" ] && grep -qF -- "$BEGIN" "$1" && sed -i "\#^$BEGIN#,\#^$END#d" "$1" || true
 }
 owned() { [ -f "$1" ] && grep -q '^# files4hyprland' "$1"; }
 
