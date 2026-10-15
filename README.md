@@ -7,6 +7,7 @@ It keeps the btop-like look of panels with outlines, and follows your desktop:
 - **Colors** come from the current Omarchy theme and change live when you switch themes
 - **Rounding and border width** come from Hyprland (`decoration:rounding`, `general:border_size`)
   and update on `hyprctl reload`
+- **Light/dark mode and icon theme** of GTK follow the Omarchy theme as well
 - **Font** is your fontconfig `monospace`; window opacity, blur and gaps stay Hyprland's
 
 ## Features
@@ -35,8 +36,8 @@ Download and install the package from the latest
 [release](https://github.com/Fanikalin/Files4Hyprland/releases/latest):
 
 ```bash
-cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v2.2.0/files4hyprland-2.2.0-1-x86_64.pkg.tar.zst
-sudo pacman -U ./files4hyprland-2.2.0-1-x86_64.pkg.tar.zst
+cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v2.3.0/files4hyprland-2.3.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./files4hyprland-2.3.0-1-x86_64.pkg.tar.zst
 ```
 
 (`pacman -U <url>` directly does not work because release packages are not GPG-signed and pacman

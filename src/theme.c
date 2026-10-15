@@ -2,6 +2,7 @@
  * from Hyprland, font from fontconfig's "monospace". Re-applied live when the
  * Omarchy theme changes or Hyprland reloads its config. */
 #include "app.h"
+#include <glib/gstdio.h>
 #include <string.h>
 
 typedef struct {
@@ -66,6 +67,18 @@ static int hypr_int(const char *opt, int def) {
     return p ? atoi(p + 6) : def;
 }
 
+/* Changes whenever Omarchy switches theme (theme.name and colors.toml are rewritten). */
+static gint64 theme_signature(void) {
+    gint64 sig = 0;
+    const char *names[] = {"theme.name", "theme/colors.toml"};
+    for (guint i = 0; i < G_N_ELEMENTS(names); i++) {
+        g_autofree char *p = g_build_filename(g_get_home_dir(), ".local/state/omarchy/current", names[i], NULL);
+        GStatBuf st;
+        if (g_stat(p, &st) == 0) sig = sig * 31 + st.st_mtime * 1000003 + st.st_ino;
+    }
+    return sig;
+}
+
 static void apply(App *a) {
     g_autoptr(GHashTable) c = read_colors();
     Look l = {
@@ -84,65 +97,76 @@ static void apply(App *a) {
 
     int r = l.rounding, rs = MIN(r, 6);
     g_autofree char *css = g_strdup_printf(
-        "window.f4h { background: %1$s; color: %4$s; font-family: monospace; }\n"
-        "window.f4h * { -gtk-icon-shadow: none; }\n"
-        ".f4h .tabbar { background: %2$s; padding: 2px 6px 0 6px; }\n"
-        ".f4h .tab { border-radius: %9$dpx %9$dpx 0 0; padding: 0 2px 0 8px; color: %5$s; }\n"
-        ".f4h .tab.active { background: %3$s; color: %6$s; font-weight: bold; }\n"
-        ".f4h .tab button { padding: 1px 4px; min-height: 0; min-width: 0; }\n"
-        ".f4h .panel { border: %10$dpx solid alpha(%6$s, 0.45); border-radius: %8$dpx; background: %1$s; }\n"
-        ".f4h .panel:focus-within, .f4h .panel:hover { border-color: %6$s; }\n"
-        ".f4h .panel-title { color: %6$s; padding: 0 6px; }\n"
-        ".f4h button { background: none; border: none; box-shadow: none; outline: none; color: %4$s;"
+        "window { background: %1$s; color: %4$s; font-family: monospace; }\n"
+        "window * { -gtk-icon-shadow: none; }\n"
+        ".tabbar { background: %2$s; padding: 2px 6px 0 6px; }\n"
+        ".tab { border-radius: %9$dpx %9$dpx 0 0; padding: 0 2px 0 8px; color: %5$s; }\n"
+        ".tab.active { background: %3$s; color: %6$s; font-weight: bold; }\n"
+        ".tab button { padding: 1px 4px; min-height: 0; min-width: 0; }\n"
+        ".panel { border: %10$dpx solid alpha(%6$s, 0.45); border-radius: %8$dpx; background: %1$s; }\n"
+        ".panel:focus-within, .panel:hover { border-color: %6$s; }\n"
+        ".panel-title { color: %6$s; padding: 0 6px; }\n"
+        "button { background: none; border: none; box-shadow: none; outline: none; color: %4$s;"
         "  padding: 1px 6px; min-height: 0; min-width: 0; border-radius: %9$dpx; text-shadow: none; }\n"
-        ".f4h button:hover { background: alpha(%6$s, 0.18); }\n"
-        ".f4h button:active, .f4h button:checked { background: alpha(%6$s, 0.3); }\n"
-        ".f4h button:disabled { color: alpha(%5$s, 0.5); }\n"
-        ".f4h button.glyph { color: %6$s; font-weight: bold; }\n"
-        ".f4h .actions button { background: %3$s; color: %6$s; margin-right: 4px; padding: 1px 8px; }\n"
-        ".f4h .actions button:hover { background: alpha(%6$s, 0.3); }\n"
-        ".f4h .actions button.suggested { background: %6$s; color: %1$s; font-weight: bold; }\n"
-        ".f4h .crumb { padding: 1px 4px; }\n"
-        ".f4h .crumb.last { font-weight: bold; }\n"
-        ".f4h .sep { color: %5$s; }\n"
-        ".f4h entry, .f4h text { background: %3$s; color: %4$s; border: none; box-shadow: none; outline: none;"
+        "button:hover { background: alpha(%6$s, 0.18); }\n"
+        "button:active, button:checked { background: alpha(%6$s, 0.3); }\n"
+        "button:disabled { color: alpha(%5$s, 0.5); }\n"
+        "button.glyph { color: %6$s; font-weight: bold; }\n"
+        ".actions button { background: %3$s; color: %6$s; margin-right: 4px; padding: 1px 8px; }\n"
+        ".actions button:hover { background: alpha(%6$s, 0.3); }\n"
+        ".actions button.suggested { background: %6$s; color: %1$s; font-weight: bold; }\n"
+        ".crumb { padding: 1px 4px; }\n"
+        ".crumb.last { font-weight: bold; }\n"
+        ".sep { color: %5$s; }\n"
+        "entry, text { background: %3$s; color: %4$s; border: none; box-shadow: none; outline: none;"
         "  border-radius: %9$dpx; min-height: 22px; caret-color: %6$s; }\n"
-        ".f4h entry:focus-within { box-shadow: inset 0 0 0 1px %6$s; }\n"
-        ".f4h entry selection, .f4h text selection { background: alpha(%6$s, 0.45); color: %4$s; }\n"
-        ".f4h columnview, .f4h columnview > listview { background: %1$s; color: %4$s; }\n"
-        ".f4h columnview > header > button { background: %2$s; color: %6$s; font-weight: bold; border: none;"
+        "entry:focus-within { box-shadow: inset 0 0 0 1px %6$s; }\n"
+        "entry selection, text selection { background: alpha(%6$s, 0.45); color: %4$s; }\n"
+        "columnview, columnview > listview { background: %1$s; color: %4$s; }\n"
+        "columnview > header > button { background: %2$s; color: %6$s; font-weight: bold; border: none;"
         "  border-radius: 0; padding: 2px 8px; }\n"
-        ".f4h columnview > header > button sort-indicator { color: %6$s; }\n"
-        ".f4h columnview row { padding: 0; border-radius: 0; }\n"
-        ".f4h columnview row:hover { background: none; box-shadow: inset 0 0 0 1px alpha(%6$s, 0.35); }\n"
-        ".f4h columnview row:selected { background: alpha(%6$s, 0.28); color: %4$s; }\n"
-        ".f4h columnview row:selected:focus-within { background: alpha(%6$s, 0.38); }\n"
-        ".f4h columnview row cell { padding: 1px 8px; }\n"
-        ".f4h .glyph-dir { color: %6$s; font-weight: bold; }\n"
-        ".f4h .dim { color: %5$s; }\n"
-        ".f4h *:drop(active) { background: alpha(%6$s, 0.35); box-shadow: inset 0 0 0 1px %6$s; }\n"
-        ".f4h list, .f4h scrolledwindow, .f4h viewport, .f4h stack { background: none; color: %4$s; }\n"
-        ".f4h list row.activatable:hover, .f4h list row:selected { background: none; }\n"
-        ".f4h .panel list, .f4h .panel list > row { background-color: transparent; }\n"
-        ".f4h list row { padding: 1px 6px; border-radius: 0; }\n"
-        ".f4h list row:hover { background: none; box-shadow: inset 0 0 0 1px alpha(%6$s, 0.35); }\n"
-        ".f4h list row.current { box-shadow: inset 3px 0 %6$s; color: %6$s; font-weight: bold; }\n"
-        ".f4h list row.header { color: %5$s; font-weight: bold; padding-top: 6px; }\n"
-        ".f4h list row.header:hover { box-shadow: none; }\n"
-        ".f4h .status { color: %5$s; padding: 2px 10px; }\n"
-        ".f4h .toast { background: %3$s; color: %4$s; border: 1px solid %6$s; border-radius: %9$dpx;"
+        "columnview > header > button sort-indicator { color: %6$s; }\n"
+        "columnview row { padding: 0; border-radius: 0; }\n"
+        "columnview row:hover { background: none; box-shadow: inset 0 0 0 1px alpha(%6$s, 0.35); }\n"
+        "columnview row:selected { background: alpha(%6$s, 0.28); color: %4$s; }\n"
+        "columnview row:selected:focus-within { background: alpha(%6$s, 0.38); }\n"
+        "columnview row cell { padding: 1px 8px; }\n"
+        ".glyph-dir { color: %6$s; font-weight: bold; }\n"
+        ".dim { color: %5$s; }\n"
+        "*:drop(active) { background: alpha(%6$s, 0.35); box-shadow: inset 0 0 0 1px %6$s; }\n"
+        "list, scrolledwindow, viewport, stack { background: none; color: %4$s; }\n"
+        "list row.activatable:hover, list row:selected { background: none; }\n"
+        ".panel list, .panel list > row { background-color: transparent; }\n"
+        "list row { padding: 1px 6px; border-radius: 0; }\n"
+        "list row:hover { background: none; box-shadow: inset 0 0 0 1px alpha(%6$s, 0.35); }\n"
+        "list row.current { box-shadow: inset 3px 0 %6$s; color: %6$s; font-weight: bold; }\n"
+        "list row.header { color: %5$s; font-weight: bold; padding-top: 6px; }\n"
+        "list row.header:hover { box-shadow: none; }\n"
+        ".status { color: %5$s; padding: 2px 10px; }\n"
+        ".toast { background: %3$s; color: %4$s; border: 1px solid %6$s; border-radius: %9$dpx;"
         "  padding: 4px 12px; margin: 10px; }\n"
-        ".f4h .toast.error { border-color: %7$s; }\n"
-        ".f4h scrollbar { background: none; border: none; }\n"
-        ".f4h scrollbar slider { background: alpha(%6$s, 0.5); min-width: 4px; min-height: 4px; border-radius: 2px; }\n"
-        ".f4h popover > contents { background: %2$s; color: %4$s; border: 1px solid %6$s; border-radius: %9$dpx;"
+        ".toast.error { border-color: %7$s; }\n"
+        "scrollbar { background: none; border: none; }\n"
+        "scrollbar slider { background: alpha(%6$s, 0.5); min-width: 4px; min-height: 4px; border-radius: 2px; }\n"
+        "popover > contents { background: %2$s; color: %4$s; border: 1px solid %6$s; border-radius: %9$dpx;"
         "  padding: 2px; }\n"
-        ".f4h popover modelbutton { padding: 3px 10px; border-radius: %9$dpx; }\n"
-        ".f4h popover modelbutton:hover { background: alpha(%6$s, 0.3); }\n"
-        ".f4h popover separator { background: alpha(%5$s, 0.4); margin: 2px 4px; }\n"
-        ".f4h tooltip { background: %2$s; color: %4$s; border: 1px solid alpha(%6$s, 0.5); }\n",
+        "popover modelbutton { padding: 3px 10px; border-radius: %9$dpx; }\n"
+        "popover modelbutton:hover { background: alpha(%6$s, 0.3); }\n"
+        "popover separator { background: alpha(%5$s, 0.4); margin: 2px 4px; }\n"
+        "tooltip { background: %2$s; color: %4$s; border: 1px solid alpha(%6$s, 0.5); }\n",
         l.bg, l.surface, l.panel, l.fg, l.muted, l.accent, l.red, r, rs, l.border);
     gtk_css_provider_load_from_string(a->css, css);
+
+    /* GTK internals (dialogs, selection handles, icons) follow the theme too */
+    const char *mode = g_hash_table_lookup(c, "mode");
+    gboolean dark = mode ? !g_str_equal(mode, "light") : TRUE;
+    GtkSettings *gs = gtk_settings_get_default();
+    g_object_set(gs, "gtk-application-prefer-dark-theme", dark, NULL);
+    g_autofree char *icons_path = g_build_filename(g_get_home_dir(), ".local/state/omarchy/current/theme/icons.theme", NULL);
+    g_autofree char *icons = NULL;
+    if (g_file_get_contents(icons_path, &icons, NULL, NULL) && *g_strstrip(icons))
+        g_object_set(gs, "gtk-icon-theme-name", icons, NULL);
+    a->theme_sig = theme_signature();
 
     g_free(l.bg); g_free(l.surface); g_free(l.panel); g_free(l.fg);
     g_free(l.muted); g_free(l.accent); g_free(l.red); g_free(l.green);
@@ -194,6 +218,11 @@ static void watch_hyprland(App *a) {
     GDataInputStream *in = g_data_input_stream_new(raw);
     g_object_set_data_full(G_OBJECT(in), "conn", conn, g_object_unref);
     watch_line(in, a);
+}
+
+/* Safety net for missed file events: re-check whenever a window becomes active. */
+void theme_check(App *a) {
+    if (theme_signature() != a->theme_sig) schedule(a);
 }
 
 void theme_init(App *a) {

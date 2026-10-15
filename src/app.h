@@ -80,10 +80,12 @@ typedef struct {
     GtkCssProvider *css;
     GFileMonitor *theme_mon;
     char accent[32];
+    gint64 theme_sig;
 } App;
 
 /* theme.c */
 void theme_init(App *a);
+void theme_check(App *a);
 
 /* util.c */
 char *human_size(guint64 n);

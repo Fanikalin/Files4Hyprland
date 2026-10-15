@@ -852,6 +852,7 @@ void window_build(App *a, GFile *start) {
     gtk_widget_add_controller(win, GTK_EVENT_CONTROLLER(mg));
 
     gtk_window_set_child(a->win, root);
+    g_signal_connect_swapped(win, "notify::is-active", G_CALLBACK(theme_check), a);
     undo_update(a);
     navigate(a, start, FALSE, NULL);
     gtk_widget_grab_focus(a->view);
