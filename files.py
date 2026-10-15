@@ -185,8 +185,41 @@ def read_devices() -> list[dict]:
 
 
 # --------------------------------------------------------------------------- widgets
+class LinkBar(Static):
+    """Static whose [@click=...] links double as drop targets."""
+
+    def _target(self, event) -> Path | None:
+        action = event.style.meta.get("@click")
+        return self.app.path_for_action(action) if isinstance(action, str) else None
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        t = self._target(event)
+        self.app.drag_hover(event, t, t.name or "/" if t else "")
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        if self.app.drag_drop(event, self._target(event)):
+            event.stop()
+
+
 class FileTable(DataTable):
     """DataTable with Explorer-like mouse handling."""
+
+    def _row(self, event) -> int | None:
+        row = event.style.meta.get("row")
+        return row if isinstance(row, int) and row >= 0 else None
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        row = self._row(event)
+        if event.button == 1 and row is not None:
+            self.app.drag_prepare(row, event)
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        t = self.app.target_for_row(self._row(event))
+        self.app.drag_hover(event, t, (t.name or "/") if t else "")
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        if self.app.drag_drop(event, self.app.target_for_row(self._row(event))):
+            event.stop()
 
     class Opened(Message):
         def __init__(self, index: int) -> None:
@@ -205,6 +238,8 @@ class FileTable(DataTable):
 
     async def on_click(self, event: events.Click) -> None:
         event.prevent_default()
+        if time.monotonic() - self.app.drag_ended < 0.3:
+            return
         meta = event.style.meta
         row = meta.get("row")
         if "row" not in meta or row is None or row < 0:
@@ -222,6 +257,29 @@ class FileTable(DataTable):
 
 
 class Sidebar(OptionList):
+    def _target(self, event) -> tuple[Path | None, bool, str]:
+        idx = event.style.meta.get("option")
+        if idx is None or not (0 <= idx < self.option_count):
+            return None, False, ""
+        oid = self.get_option_at_index(idx).id or ""
+        if oid.startswith("dir:"):
+            p = Path(oid[4:])
+            return p, p == TRASH, ("Trash" if p == TRASH else p.name or "/")
+        if oid.startswith("dev:"):
+            d = self.app.device_for(oid[4:])
+            if d and d["mount"]:
+                return Path(d["mount"]), False, d["name"]
+        return None, False, ""
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        t, trash, label = self._target(event)
+        self.app.drag_hover(event, t, label, trash)
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        t, trash, _ = self._target(event)
+        if self.app.drag_drop(event, t, trash):
+            event.stop()
+
     class Context(Message):
         def __init__(self, option_id: str | None, x: int, y: int, middle: bool) -> None:
             super().__init__()
@@ -385,6 +443,13 @@ class FilesApp(App):
     FileTable > .datatable--header { background: $surface; color: $primary; text-style: bold; }
     FileTable > .datatable--cursor { background: $panel; color: $primary; text-style: bold; }
     FileTable > .datatable--hover { background: transparent; }
+    FileTable:focus, Sidebar:focus { background-tint: transparent; }
+    FileTable:focus > .datatable--header { background-tint: transparent; }
+    .-dragging FileTable > .datatable--hover { background: $primary 30%; }
+    .-dragging Sidebar > .option-list--option-hover { background: $primary 30%; }
+    Screen { layers: base overlay; }
+    Screen > * { layer: base; }
+    #ghost { layer: overlay; display: none; width: auto; height: 1; padding: 0 1; background: $primary; color: $background; text-style: bold; }
     FileTable > .datatable--header-hover { background: $surface; }
     FileTable > .datatable--fixed-cursor { background: $panel; }
     FileTable:focus > .datatable--cursor { background: $primary 30%; color: $foreground; text-style: bold; }
@@ -424,6 +489,8 @@ class FilesApp(App):
         self.out = out
         self.pick_name = name
         self.picked = False
+        self.drag: dict | None = None
+        self.drag_ended = 0.0
         self.tabs: list[TabState] = [TabState(start, cursor=select)]
         self.cur = 0
         self.show_hidden = False
@@ -438,10 +505,11 @@ class FilesApp(App):
 
     # ---- compose / mount
     def compose(self) -> ComposeResult:
-        yield Static(id="tabs")
+        yield LinkBar(id="tabs")
+        yield Static(id="ghost")
         with Horizontal(id="nav"):
             yield Static(id="navbtns")
-            yield Static(id="crumbs")
+            yield LinkBar(id="crumbs")
             yield Input(id="addr")
             yield Input(placeholder=" Search", id="search")
         with Horizontal(id="actionrow"):
@@ -1049,6 +1117,85 @@ class FilesApp(App):
             except OSError as exc:
                 self.notify(str(exc), severity="error")
 
+    # ---- drag and drop (inside the app)
+    def path_for_action(self, action: str) -> Path | None:
+        import re
+
+        m = re.fullmatch(r"app\.(tab|crumb)\((\d+)\)", action)
+        if not m:
+            return None
+        i = int(m.group(2))
+        if m.group(1) == "tab":
+            return self.tabs[i].path if i < len(self.tabs) else None
+        parts = self.tab.path.parts
+        return Path(*parts[: i + 1]) if i < len(parts) else None
+
+    def target_for_row(self, row: int | None) -> Path | None:
+        if row is not None and 0 <= row < len(self.view) and self.view[row].is_dir:
+            return self.view[row].path
+        return self.tab.path
+
+    def drag_prepare(self, index: int, event: events.MouseDown) -> None:
+        if 0 <= index < len(self.view):
+            self.drag = {"index": index, "start": (event.screen_x, event.screen_y), "active": False, "paths": []}
+
+    def drag_hover(self, event: events.MouseMove, target: Path | None, label: str, trash: bool = False) -> None:
+        d = self.drag
+        if not d:
+            return
+        if not d["active"]:
+            dx = abs(event.screen_x - d["start"][0]) + abs(event.screen_y - d["start"][1])
+            if dx < 2:
+                return
+            e = self.view[d["index"]]
+            d["paths"] = [x.path for x in self.view if x.name in self.tab.selected] if e.name in self.tab.selected else [e.path]
+            d["active"] = True
+            self.screen.add_class("-dragging")
+        n = len(d["paths"])
+        what = d["paths"][0].name if n == 1 else f"{n} items"
+        verb = "copy" if event.ctrl else ("trash" if trash else "move")
+        text = f"{what} \u2192 {verb} to {label}" if target else f"{what} \u2014 no drop here"
+        ghost = self.query_one("#ghost", Static)
+        ghost.update(escape(text))
+        ghost.styles.offset = (max(0, min(event.screen_x + 2, self.size.width - len(text) - 3)), min(event.screen_y + 1, self.size.height - 1))
+        ghost.display = True
+
+    def drag_end(self) -> None:
+        self.drag = None
+        self.screen.remove_class("-dragging")
+        self.query_one("#ghost", Static).display = False
+        self.drag_ended = time.monotonic()
+
+    def drag_drop(self, event: events.MouseUp, target: Path | None, trash: bool = False) -> bool:
+        d = self.drag
+        if not d or not d["active"]:
+            self.drag = None
+            return False
+        paths = d["paths"]
+        self.drag_end()
+        if target is None:
+            return True
+        if trash:
+            fails = 0
+            for p in paths:
+                r = subprocess.run(["gio", "trash", str(p)], capture_output=True, text=True)
+                fails += r.returncode != 0
+            self.tab.selected.clear()
+            self.refresh_listing()
+            self.notify(f"Moved {len(paths) - fails} item(s) to Trash" + (f", {fails} failed" if fails else ""))
+            return True
+        copy = bool(event.ctrl)
+        if not copy:
+            paths = [p for p in paths if p.parent != target]
+        if paths:
+            self.tab.selected.clear()
+            self.run_paste("copy" if copy else "cut", paths, target)
+        return True
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        if self.drag:  # released over something that is not a drop target
+            self.drag_end()
+
     # ---- picker mode
     def finish_pick(self, paths: list[Path]) -> None:
         if self.out is not None:
@@ -1138,6 +1285,9 @@ class FilesApp(App):
         self.query_one("#search", Input).focus()
 
     def on_key(self, event: events.Key) -> None:
+        if event.key == "escape" and self.drag:
+            self.drag_end()
+            return
         if event.key == "escape":
             if self.query_one("#addr").display:
                 self.close_address()

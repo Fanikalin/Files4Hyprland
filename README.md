@@ -9,6 +9,7 @@ A mouse-friendly terminal file manager with an Explorer-like layout, built with
 - Location bar with back / forward / up, clickable breadcrumbs, editable path and live search
 - Click to select, double-click to open, `Ctrl`/`Shift`+click for multi-select, right-click context menu
 - Icon-only toolbar: new folder / file, cut, copy, paste, rename, trash (via `gio trash`), hidden files
+- Drag and drop: drag files onto a folder, a sidebar place or disk, a tab or a path segment to move them (hold `Ctrl` to copy; drop on Trash to trash). `Esc` cancels
 - Sortable columns, hidden-file toggle, free-space status line
 - File chooser mode, so it can replace the system "Open / Save" dialog
 
@@ -18,8 +19,8 @@ Requires a Nerd Font for icons. Download and install the package from the latest
 [release](https://github.com/Fanikalin/Files4Hyprland/releases/latest):
 
 ```bash
-cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v1.1.1/files4hyprland-1.1.1-1-any.pkg.tar.zst
-sudo pacman -U ./files4hyprland-1.1.1-1-any.pkg.tar.zst
+cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v1.2.0/files4hyprland-1.2.0-1-any.pkg.tar.zst
+sudo pacman -U ./files4hyprland-1.2.0-1-any.pkg.tar.zst
 ```
 
 (`pacman -U <url>` directly does not work because release packages are not GPG-signed, and pacman

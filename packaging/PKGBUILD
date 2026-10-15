@@ -1,6 +1,6 @@
 # Maintainer: Fanikalin
 pkgname=files4hyprland
-pkgver=1.1.1
+pkgver=1.2.0
 pkgrel=1
 pkgdesc='Mouse-friendly TUI file manager for Hyprland/Omarchy: sidebar, tabs, system file chooser'
 arch=('any')
