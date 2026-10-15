@@ -6,6 +6,15 @@
     "standard::name,standard::display-name,standard::type,standard::size,standard::is-hidden,"     \
     "standard::is-backup,standard::is-symlink,standard::icon,standard::fast-content-type,time::modified"
 
+/* undoable operations: pairs of src -> dst files (dst NULL for trash) */
+typedef enum { OP_RENAME, OP_MOVE, OP_COPY, OP_TRASH, OP_CREATE } OpKind;
+typedef struct {
+    OpKind kind;
+    gboolean is_dir; /* OP_CREATE: folder or file */
+    GPtrArray *src;  /* GFile* (NULL entries allowed) */
+    GPtrArray *dst;
+} Op;
+
 typedef enum { PICK_NONE, PICK_FILE, PICK_FILES, PICK_DIR, PICK_SAVE } PickMode;
 typedef enum { SORT_NAME, SORT_SIZE, SORT_MTIME } SortCol;
 
@@ -57,6 +66,7 @@ typedef struct {
     char *fs_info;
     guint status_idle;
     char *side_target; /* sidebar row id under the context menu */
+    GQueue undo, redo; /* Op* */
 
     /* devices */
     GVolumeMonitor *vm;
@@ -77,6 +87,9 @@ void theme_init(App *a);
 
 /* util.c */
 char *human_size(guint64 n);
+gboolean fs_move(GFile *src, GFile *dst, GError **err);
+gboolean fs_copy(GFile *src, GFile *dst, GError **err);
+gboolean fs_delete(GFile *f, GError **err);
 GFile *unique_child(GFile *dir, const char *name);
 void toast(App *a, const char *fmt, ...) G_GNUC_PRINTF(2, 3);
 void transfer_files(App *a, GList *files, GFile *dest, gboolean copy);
@@ -95,6 +108,14 @@ void add_drag_source(App *a, GtkWidget *cell);
 GtkWidget *sidebar_new(App *a);
 void sidebar_rebuild(App *a);
 void sidebar_mark_current(App *a);
+
+/* undo.c */
+Op *op_new(OpKind kind, gboolean is_dir);
+void op_add(Op *op, GFile *src, GFile *dst);
+void op_free(Op *op);
+void undo_push(App *a, Op *op);
+void undo_run(App *a, gboolean redo);
+void undo_update(App *a);
 
 /* search.c */
 void search_set(App *a, const char *text);

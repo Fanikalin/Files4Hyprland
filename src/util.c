@@ -88,12 +88,14 @@ typedef struct {
     GFile *dest;
     int done, failed;
     GString *errors;
+    Op *rec; /* what actually happened, for undo */
 } Job;
 
 static void job_free(Job *j) {
     g_list_free_full(j->files, g_object_unref);
     g_clear_object(&j->dest);
     g_string_free(j->errors, TRUE);
+    if (j->rec) op_free(j->rec);
     g_free(j);
 }
 
@@ -146,8 +148,28 @@ static gboolean delete_tree(GFile *f, GError **err) {
     return g_file_delete(f, NULL, err);
 }
 
+gboolean fs_move(GFile *src, GFile *dst, GError **err) {
+    if (g_file_is_native(src) && g_file_is_native(dst)) return run_tool("mv", src, dst, err);
+    g_autoptr(GError) e = NULL;
+    if (g_file_move(src, dst, G_FILE_COPY_NOFOLLOW_SYMLINKS | G_FILE_COPY_ALL_METADATA, NULL, NULL, NULL, &e))
+        return TRUE;
+    if (!copy_tree(src, dst, err)) return FALSE;
+    return delete_tree(src, err);
+}
+
+gboolean fs_copy(GFile *src, GFile *dst, GError **err) {
+    if (g_file_is_native(src) && g_file_is_native(dst)) return run_tool("cp", src, dst, err);
+    return copy_tree(src, dst, err);
+}
+
+gboolean fs_delete(GFile *f, GError **err) { return delete_tree(f, err); }
+
 static gboolean do_one(Job *j, GFile *src, GError **err) {
-    if (j->kind == JOB_TRASH) return g_file_trash(src, NULL, err);
+    if (j->kind == JOB_TRASH) {
+        if (!g_file_trash(src, NULL, err)) return FALSE;
+        op_add(j->rec, src, NULL);
+        return TRUE;
+    }
 
     g_autofree char *name = g_file_get_basename(src);
     g_autoptr(GFile) parent = g_file_get_parent(src);
@@ -157,16 +179,9 @@ static gboolean do_one(Job *j, GFile *src, GError **err) {
         return FALSE;
     }
     g_autoptr(GFile) dst = unique_child(j->dest, name);
-    gboolean local = g_file_is_native(src) && g_file_is_native(dst);
-    if (local) return run_tool(j->kind == JOB_COPY ? "cp" : "mv", src, dst, err);
-    if (j->kind == JOB_MOVE) {
-        g_autoptr(GError) e = NULL;
-        if (g_file_move(src, dst, G_FILE_COPY_NOFOLLOW_SYMLINKS | G_FILE_COPY_ALL_METADATA, NULL, NULL, NULL, &e))
-            return TRUE;
-        if (!copy_tree(src, dst, err)) return FALSE;
-        return delete_tree(src, err);
-    }
-    return copy_tree(src, dst, err);
+    if (!(j->kind == JOB_COPY ? fs_copy(src, dst, err) : fs_move(src, dst, err))) return FALSE;
+    op_add(j->rec, src, dst);
+    return TRUE;
 }
 
 static void job_thread(GTask *task, gpointer src, gpointer data, GCancellable *c) {
@@ -194,6 +209,10 @@ static void job_done(GObject *src, GAsyncResult *res, gpointer data) {
     } else {
         toast(j->a, "%s %d item(s)", verb, j->done);
     }
+    if (j->rec->src->len) {
+        undo_push(j->a, j->rec);
+        j->rec = NULL;
+    }
     queue_status(j->a);
     job_free(j);
 }
@@ -211,6 +230,7 @@ static void run_job(App *a, JobKind kind, GList *files, GFile *dest) {
     j->files = g_list_copy_deep(files, ref_copy, NULL);
     j->dest = dest ? g_object_ref(dest) : NULL;
     j->errors = g_string_new(NULL);
+    j->rec = op_new(kind == JOB_COPY ? OP_COPY : kind == JOB_MOVE ? OP_MOVE : OP_TRASH, FALSE);
     g_autoptr(GTask) t = g_task_new(NULL, NULL, job_done, j);
     g_task_set_task_data(t, j, NULL);
     g_task_run_in_thread(t, job_thread);

@@ -513,6 +513,9 @@ static void mkdir_cb(GObject *src, GAsyncResult *res, gpointer data) {
         toast(data, "%s", err->message);
         return;
     }
+    Op *op = op_new(OP_CREATE, TRUE);
+    op_add(op, NULL, G_FILE(src));
+    undo_push(data, op);
     g_autofree char *name = g_file_get_basename(G_FILE(src));
     view_select_name(data, name, TRUE);
 }
@@ -525,6 +528,9 @@ static void create_cb(GObject *src, GAsyncResult *res, gpointer data) {
         return;
     }
     g_output_stream_close(G_OUTPUT_STREAM(os), NULL, NULL);
+    Op *op = op_new(OP_CREATE, FALSE);
+    op_add(op, NULL, G_FILE(src));
+    undo_push(data, op);
     g_autofree char *name = g_file_get_basename(G_FILE(src));
     view_select_name(data, name, TRUE);
 }
@@ -613,6 +619,8 @@ static void act(GSimpleAction *action, GVariant *param, gpointer data) {
         g_autoptr(GError) err = NULL;
         if (p && !g_spawn_async(p, (char **)argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err))
             toast(a, "%s", err->message);
+    } else if (g_str_equal(n, "undo") || g_str_equal(n, "redo")) {
+        undo_run(a, g_str_equal(n, "redo"));
     } else if (g_str_equal(n, "choose")) {
         choose(a);
     } else if (g_str_equal(n, "cancel-pick") || g_str_equal(n, "quit")) {
@@ -622,7 +630,7 @@ static void act(GSimpleAction *action, GVariant *param, gpointer data) {
 
 static const char *ACTIONS[] = {"back", "forward", "up", "refresh", "new-tab", "close-tab", "next-tab", "prev-tab",
                                 "address", "search", "toggle-hidden", "open", "open-tab", "cut", "copy", "paste",
-                                "copy-path", "rename", "trash", "new-folder", "new-file", "terminal", "choose",
+                                "copy-path", "rename", "trash", "new-folder", "new-file", "terminal", "undo", "redo", "choose",
                                 "cancel-pick", "quit"};
 
 static void setup_actions(App *a) {
@@ -647,6 +655,8 @@ static void setup_actions(App *a) {
         {"win.new-folder", {"<Control><Shift>n", NULL}},
         {"win.terminal", {"<Control><Alt>t", NULL}},
         {"win.quit", {"<Control>q", NULL}},
+        {"win.undo", {"<Control>z", NULL}},
+        {"win.redo", {"<Control><Shift>z", "<Control>y", NULL}},
     };
     for (guint i = 0; i < G_N_ELEMENTS(accels); i++)
         gtk_application_set_accels_for_action(a->gapp, accels[i].act, accels[i].keys);
@@ -715,6 +725,8 @@ static GtkWidget *build_actions(App *a) {
         {"", "win.paste", "Paste (Ctrl+V)", FALSE},
         {"", "win.rename", "Rename (F2)", FALSE},
         {"", "win.trash", "Move to Trash (Delete)", FALSE},
+        {"\uf0e2", "win.undo", "Undo (Ctrl+Z)", FALSE},
+        {"\uf01e", "win.redo", "Redo (Ctrl+Shift+Z / Ctrl+Y)", FALSE},
         {"", "win.toggle-hidden", "Show hidden files (Ctrl+H)", TRUE},
     };
     for (guint i = 0; i < G_N_ELEMENTS(items); i++) {
@@ -840,6 +852,7 @@ void window_build(App *a, GFile *start) {
     gtk_widget_add_controller(win, GTK_EVENT_CONTROLLER(mg));
 
     gtk_window_set_child(a->win, root);
+    undo_update(a);
     navigate(a, start, FALSE, NULL);
     gtk_widget_grab_focus(a->view);
 }

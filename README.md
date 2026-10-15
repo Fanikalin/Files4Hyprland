@@ -23,6 +23,8 @@ It keeps the btop-like look of panels with outlines, and follows your desktop:
   Inside the app a drop moves, from other apps it copies; hold `Ctrl` to copy or `Shift` to move.
   Dropping on Trash trashes
 - Rename in place (`F2`), new folder / file created and named in place
+- Undo / redo (toolbar buttons, `Ctrl+Z`, `Ctrl+Shift+Z` / `Ctrl+Y`) for rename, move, copy, trash
+  (restores from Trash) and new folder / file; the button tooltip says what will be undone
 - Cut / copy / paste compatible with Nautilus, Thunar, Dolphin (`x-special/gnome-copied-files`)
 - Live updates when files change on disk; sortable columns; hidden files toggle; free space in the status line
 - File chooser mode, so it can replace the system "Open / Save" dialog
@@ -33,8 +35,8 @@ Download and install the package from the latest
 [release](https://github.com/Fanikalin/Files4Hyprland/releases/latest):
 
 ```bash
-cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v2.1.0/files4hyprland-2.1.0-1-x86_64.pkg.tar.zst
-sudo pacman -U ./files4hyprland-2.1.0-1-x86_64.pkg.tar.zst
+cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v2.2.0/files4hyprland-2.2.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./files4hyprland-2.2.0-1-x86_64.pkg.tar.zst
 ```
 
 (`pacman -U <url>` directly does not work because release packages are not GPG-signed and pacman
@@ -72,6 +74,7 @@ Try it by hand: `files4hyprland --pick file|files|dir|save --out FILE [PATH]`.
 | `Enter` / double-click | open |
 | `Backspace`, `Alt+←/→/↑`, mouse back/forward | up, back, forward, up |
 | `Ctrl+C/X/V`, `Delete`, `F2` | copy, cut, paste, trash, rename |
+| `Ctrl+Z`, `Ctrl+Shift+Z` / `Ctrl+Y` | undo, redo |
 | `Ctrl+Shift+N`, `Ctrl+H`, `F5` | new folder, hidden files, refresh |
 | `Ctrl+L`, `Ctrl+F` or `/` | edit path, search |
 | `Ctrl+T`, `Ctrl+W`, `Ctrl+Tab` | new, close, next tab |

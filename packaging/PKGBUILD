@@ -1,6 +1,6 @@
 # Maintainer: Fanikalin
 pkgname=files4hyprland
-pkgver=2.1.0
+pkgver=2.2.0
 pkgrel=1
 pkgdesc='Light native (GTK4/C) file manager for Hyprland/Omarchy: sidebar, tabs, system drag and drop'
 arch=('x86_64' 'aarch64')
@@ -16,7 +16,7 @@ optdepends=(
 options=('!debug')
 install=files4hyprland.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('71c2e6f4289bc80b534c0dba720026c83a179fba93c3d47d07125c5733ad60a6')
+sha256sums=('SKIP')
 
 build() {
   arch-meson "Files4Hyprland-$pkgver" build

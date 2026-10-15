@@ -162,6 +162,11 @@ static void renamed_cb(GObject *src, GAsyncResult *res, gpointer data) {
     App *a = data;
     g_autoptr(GError) err = NULL;
     g_autoptr(GFile) nf = g_file_set_display_name_finish(G_FILE(src), res, &err);
+    if (nf) {
+        Op *op = op_new(OP_RENAME, FALSE);
+        op_add(op, G_FILE(src), nf);
+        undo_push(a, op);
+    }
     if (!nf) {
         toast(a, "Rename failed: %s", err->message);
         return;
@@ -223,6 +228,8 @@ static GMenuModel *build_menu(gboolean item) {
         g_menu_append(s3, "Move to Trash", "win.trash");
     } else {
         g_menu_append(s1, "Paste", "win.paste");
+        g_menu_append(s1, "Undo", "win.undo");
+        g_menu_append(s1, "Redo", "win.redo");
         g_menu_append(s2, "New folder", "win.new-folder");
         g_menu_append(s2, "New file", "win.new-file");
         g_menu_append(s3, "Open terminal here", "win.terminal");
