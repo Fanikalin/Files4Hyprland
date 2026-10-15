@@ -5,6 +5,7 @@
 
 static App app;
 static char *start_arg;
+static char *search_arg;
 
 static gboolean on_signal(gpointer data) {
     g_application_quit(G_APPLICATION(data));
@@ -50,6 +51,7 @@ static void on_activate(GtkApplication *gapp, gpointer data) {
     window_build(&app, start);
     g_signal_connect_after(app.win, "realize", G_CALLBACK(drop_renderer_env), NULL);
     if (select) view_select_name(&app, select, FALSE);
+    if (search_arg) gtk_editable_set_text(GTK_EDITABLE(app.search), search_arg);
     gtk_window_present(app.win);
 }
 
@@ -60,6 +62,7 @@ int main(int argc, char **argv) {
         {"pick", 0, 0, G_OPTION_ARG_STRING, &pick, "File chooser mode: file, files, dir or save", "MODE"},
         {"out", 0, 0, G_OPTION_ARG_FILENAME, &app.pick_out, "Write chosen paths here, one per line", "FILE"},
         {"name", 0, 0, G_OPTION_ARG_STRING, &app.pick_name, "Suggested file name for --pick save", "NAME"},
+        {"search", 0, 0, G_OPTION_ARG_STRING, &search_arg, "Search this folder and its subfolders", "TEXT"},
         {"version", 0, 0, G_OPTION_ARG_NONE, &version, "Print the version", NULL},
         {NULL, 0, 0, 0, NULL, NULL, NULL},
     };

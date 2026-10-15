@@ -1,5 +1,5 @@
 project('files4hyprland', 'c',
-  version: '2.0.0',
+  version: '2.1.0',
   license: 'MIT',
   meson_version: '>= 1.0',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=release', 'b_lto=true'])
@@ -8,7 +8,7 @@ gtk = dependency('gtk4', version: '>= 4.12')
 gio_unix = dependency('gio-unix-2.0')
 
 executable('files4hyprland',
-  'src/main.c', 'src/window.c', 'src/view.c', 'src/sidebar.c', 'src/dnd.c', 'src/util.c', 'src/theme.c',
+  'src/main.c', 'src/window.c', 'src/view.c', 'src/sidebar.c', 'src/dnd.c', 'src/util.c', 'src/theme.c', 'src/search.c',
   dependencies: [gtk, gio_unix],
   c_args: ['-DF4H_VERSION="' + meson.project_version() + '"', '-Wno-unused-parameter'],
   install: true)

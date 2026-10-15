@@ -14,7 +14,9 @@ It keeps the btop-like look of panels with outlines, and follows your desktop:
 - Sidebar: XDG places, GTK bookmarks, Trash, and devices from GIO/udisks (click to mount,
   right-click to unmount or eject, password/LUKS prompts handled)
 - Tabs (click, `+`, `×`, middle-click to close; middle-click a sidebar place to open it in a new tab)
-- Location bar: back / forward / up / refresh, clickable path, editable path (`Ctrl+L`), live search
+- Location bar: back / forward / up / refresh, clickable path, editable path (`Ctrl+L`)
+- Search covers subfolders: results stream in from a background thread, each with its subfolder shown
+  dimmed (`files4hyprland --search TEXT [PATH]` opens with a search)
 - Click to select, double-click to open, `Ctrl`/`Shift`+click for several; right-click menus
 - **System drag and drop**: drag files out to any app (browser, chat, editor, other file managers)
   and drop files in from any app. Drop on a folder, a sidebar place or disk, a tab or a path segment.
@@ -31,8 +33,8 @@ Download and install the package from the latest
 [release](https://github.com/Fanikalin/Files4Hyprland/releases/latest):
 
 ```bash
-cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v2.0.0/files4hyprland-2.0.0-1-x86_64.pkg.tar.zst
-sudo pacman -U ./files4hyprland-2.0.0-1-x86_64.pkg.tar.zst
+cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v2.1.0/files4hyprland-2.1.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./files4hyprland-2.1.0-1-x86_64.pkg.tar.zst
 ```
 
 (`pacman -U <url>` directly does not work because release packages are not GPG-signed and pacman

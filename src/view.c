@@ -4,10 +4,6 @@
 #include "app.h"
 #include <string.h>
 
-#define ATTRS                                                                                                    \
-    "standard::name,standard::display-name,standard::type,standard::size,standard::is-hidden,"                  \
-    "standard::is-backup,standard::is-symlink,standard::icon,standard::fast-content-type,time::modified"
-
 /* ---------------------------------------------------------------- glyphs */
 static const char *glyph_for(GFileInfo *info) {
     if (info_is_dir(info)) return "";
@@ -323,7 +319,14 @@ static void name_bind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer dat
     gtk_label_set_text(GTK_LABEL(g), glyph_for(info));
     if (info_is_dir(info)) gtk_widget_add_css_class(g, "glyph-dir");
     else gtk_widget_remove_css_class(g, "glyph-dir");
-    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(box), "label")), g_file_info_get_display_name(info));
+    GtkWidget *label = g_object_get_data(G_OBJECT(box), "label");
+    const char *rel = g_file_info_get_attribute_string(info, "f4h::rel");
+    if (rel && *rel) {
+        g_autofree char *m = g_markup_printf_escaped("%s  <span alpha=\"50%%\">%s</span>", g_file_info_get_display_name(info), rel);
+        gtk_label_set_markup(GTK_LABEL(label), m);
+    } else {
+        gtk_label_set_text(GTK_LABEL(label), g_file_info_get_display_name(info));
+    }
     gtk_stack_set_visible_child_name(GTK_STACK(g_object_get_data(G_OBJECT(box), "stack")), "label");
     g_object_set_data(G_OBJECT(info), "cell", box);
 }
@@ -469,7 +472,7 @@ GtkWidget *view_new(App *a) {
     item_menu = build_menu(TRUE);
     empty_menu = build_menu(FALSE);
 
-    a->dirlist = gtk_directory_list_new(ATTRS, NULL);
+    a->dirlist = gtk_directory_list_new(F4H_ATTRS, NULL);
     gtk_directory_list_set_monitored(a->dirlist, TRUE);
     gtk_directory_list_set_io_priority(a->dirlist, G_PRIORITY_DEFAULT_IDLE);
     g_signal_connect(a->dirlist, "notify::error", G_CALLBACK(on_dir_error), a);

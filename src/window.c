@@ -663,11 +663,7 @@ static GtkWidget *glyph_button(App *a, const char *glyph, const char *action, co
 }
 
 static void on_search_changed(GtkSearchEntry *e, gpointer data) {
-    App *a = data;
-    const char *txt = gtk_editable_get_text(GTK_EDITABLE(e));
-    g_free(a->query);
-    a->query = *txt ? g_utf8_casefold(txt, -1) : NULL;
-    gtk_filter_changed(GTK_FILTER(a->filter), GTK_FILTER_CHANGE_DIFFERENT);
+    search_set(data, gtk_editable_get_text(GTK_EDITABLE(e)));
 }
 
 static void on_search_stop(GtkSearchEntry *e, gpointer data) {

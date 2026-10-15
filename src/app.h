@@ -2,6 +2,10 @@
 #pragma once
 #include <gtk/gtk.h>
 
+#define F4H_ATTRS                                                                                    \
+    "standard::name,standard::display-name,standard::type,standard::size,standard::is-hidden,"     \
+    "standard::is-backup,standard::is-symlink,standard::icon,standard::fast-content-type,time::modified"
+
 typedef enum { PICK_NONE, PICK_FILE, PICK_FILES, PICK_DIR, PICK_SAVE } PickMode;
 typedef enum { SORT_NAME, SORT_SIZE, SORT_MTIME } SortCol;
 
@@ -40,6 +44,9 @@ typedef struct {
     guint cur;
     gboolean show_hidden;
     char *query; /* casefolded search text, or NULL */
+    GListStore *results;     /* recursive search results (GFileInfo) */
+    GCancellable *search_cancel;
+    guint search_timer;
     SortCol sort_col;
     gboolean sort_desc;
     GList *clip; /* GFile* */
@@ -88,6 +95,9 @@ void add_drag_source(App *a, GtkWidget *cell);
 GtkWidget *sidebar_new(App *a);
 void sidebar_rebuild(App *a);
 void sidebar_mark_current(App *a);
+
+/* search.c */
+void search_set(App *a, const char *text);
 
 /* view.c */
 GtkWidget *view_new(App *a);
