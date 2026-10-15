@@ -389,27 +389,40 @@ static void paste_list_cb(GObject *src, GAsyncResult *res, gpointer data) {
     g_free(r);
 }
 
+static void paste_gnome_parse(PasteReq *r, GBytes *b) {
+    g_autofree char *txt = g_strndup(g_bytes_get_data(b, NULL), g_bytes_get_size(b));
+    g_auto(GStrv) lines = g_strsplit(txt, "\n", -1);
+    gboolean cut = lines[0] && g_str_equal(g_strstrip(lines[0]), "cut");
+    GList *l = NULL;
+    for (char **p = lines + (lines[0] ? 1 : 0); *p; p++) {
+        g_strstrip(*p);
+        if (**p) l = g_list_prepend(l, g_file_new_for_uri(*p));
+    }
+    l = g_list_reverse(l);
+    paste_files(r, l, cut);
+    g_list_free_full(l, g_object_unref);
+    g_object_unref(r->dest);
+    g_free(r);
+}
+
+/* Reading must not block the main loop: when this process owns the clipboard the
+ * data is served from the same loop, so a synchronous splice would deadlock. */
+static void paste_splice_cb(GObject *src, GAsyncResult *res, gpointer data) {
+    PasteReq *r = data;
+    g_autoptr(GOutputStream) out = G_OUTPUT_STREAM(src);
+    g_output_stream_splice_finish(out, res, NULL);
+    g_autoptr(GBytes) b = g_memory_output_stream_steal_as_bytes(G_MEMORY_OUTPUT_STREAM(out));
+    paste_gnome_parse(r, b);
+}
+
 static void paste_gnome_cb(GObject *src, GAsyncResult *res, gpointer data) {
     PasteReq *r = data;
     GdkClipboard *cb = GDK_CLIPBOARD(src);
     g_autoptr(GInputStream) in = gdk_clipboard_read_finish(cb, res, NULL, NULL);
     if (in) {
-        g_autoptr(GOutputStream) out = g_memory_output_stream_new_resizable();
-        g_output_stream_splice(out, in, G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE | G_OUTPUT_STREAM_SPLICE_CLOSE_TARGET, NULL, NULL);
-        g_autoptr(GBytes) b = g_memory_output_stream_steal_as_bytes(G_MEMORY_OUTPUT_STREAM(out));
-        g_autofree char *txt = g_strndup(g_bytes_get_data(b, NULL), g_bytes_get_size(b));
-        g_auto(GStrv) lines = g_strsplit(txt, "\n", -1);
-        gboolean cut = lines[0] && g_str_equal(g_strstrip(lines[0]), "cut");
-        GList *l = NULL;
-        for (char **p = lines + (lines[0] ? 1 : 0); *p; p++) {
-            g_strstrip(*p);
-            if (**p) l = g_list_prepend(l, g_file_new_for_uri(*p));
-        }
-        l = g_list_reverse(l);
-        paste_files(r, l, cut);
-        g_list_free_full(l, g_object_unref);
-        g_object_unref(r->dest);
-        g_free(r);
+        GOutputStream *out = g_memory_output_stream_new_resizable();
+        g_output_stream_splice_async(out, in, G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE | G_OUTPUT_STREAM_SPLICE_CLOSE_TARGET,
+                                     G_PRIORITY_DEFAULT, NULL, paste_splice_cb, r);
         return;
     }
     gdk_clipboard_read_value_async(cb, GDK_TYPE_FILE_LIST, G_PRIORITY_DEFAULT, NULL, paste_list_cb, r);
@@ -420,6 +433,15 @@ static void do_paste(App *a) {
     r->a = a;
     r->dest = g_object_ref(cur_tab(a)->dir);
     GdkClipboard *cb = gtk_widget_get_clipboard(GTK_WIDGET(a->win));
+    if (a->clip && gdk_clipboard_is_local(cb)) {
+        /* our own clipboard content: no need to round-trip through the display server */
+        GList *files = g_list_copy(a->clip);
+        paste_files(r, files, a->clip_cut);
+        g_list_free(files);
+        g_object_unref(r->dest);
+        g_free(r);
+        return;
+    }
     GdkContentFormats *f = gdk_clipboard_get_formats(cb);
     if (gdk_content_formats_contain_mime_type(f, "x-special/gnome-copied-files")) {
         const char *mimes[] = {"x-special/gnome-copied-files", NULL};
