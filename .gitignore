@@ -1,2 +1,2 @@
+build/
 *.pkg.tar.zst
-__pycache__/

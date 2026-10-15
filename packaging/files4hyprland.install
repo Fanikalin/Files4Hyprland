@@ -1,17 +1,22 @@
+for_each_user() {  # run files4hyprland-setup with the given args for every user that has a home
+  for h in /home/*; do
+    [ -d "$h" ] || continue
+    u=$(stat -c %U "$h" 2>/dev/null) || continue
+    runuser -u "$u" -- env HOME="$h" files4hyprland-setup "$@" --quiet >/dev/null 2>&1 || true
+  done
+}
+
 post_install() {
   echo ":: Run 'files4hyprland-setup --all' as your user to make Files the default folder handler,"
   echo "   add SUPER+SHIFT+F and use it as the file-chooser dialog."
 }
 
 post_upgrade() {
-  echo ":: Files4Hyprland updated. Re-run 'files4hyprland-setup --all' only if its settings changed."
+  # refresh only what each user already enabled (bindings, portal wrapper, default handler)
+  for_each_user --refresh
 }
 
 pre_remove() {
-  # Undo the per-user settings that files4hyprland-setup added (they are marked).
-  for h in /home/*; do
-    [ -d "$h" ] || continue
-    u=$(stat -c %U "$h" 2>/dev/null) || continue
-    runuser -u "$u" -- env HOME="$h" files4hyprland-setup --undo --quiet >/dev/null 2>&1 || true
-  done
+  # undo the per-user settings files4hyprland-setup added (they are marked)
+  for_each_user --undo
 }

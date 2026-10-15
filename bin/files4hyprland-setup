@@ -5,6 +5,7 @@
 #   --portal   use it as the system "choose a file" dialog (needs xdg-desktop-portal-termfilechooser)
 #   --all      all of the above
 #   --undo     remove everything this script added
+#   --refresh  re-apply only what is already enabled (used on package upgrade)
 set -euo pipefail
 
 SHARE=/usr/share/files4hyprland
@@ -16,20 +17,20 @@ desk="$(echo "${XDG_CURRENT_DESKTOP:-Hyprland}" | cut -d: -f1 | tr '[:upper:]' '
 PC="$HOME/.config/xdg-desktop-portal/${desk}-portals.conf"
 MIME="$HOME/.config/mimeapps.list"
 
-DEFAULT=0; HYPR=0; PORTAL=0; UNDO=0; QUIET=0
+DEFAULT=0; HYPR=0; PORTAL=0; UNDO=0; QUIET=0; REFRESH=0
 for a in "$@"; do
   case "$a" in
     --default) DEFAULT=1 ;; --hypr) HYPR=1 ;; --portal) PORTAL=1 ;;
-    --all) DEFAULT=1; HYPR=1; PORTAL=1 ;; --undo) UNDO=1 ;; --quiet) QUIET=1 ;;
-    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+    --all) DEFAULT=1; HYPR=1; PORTAL=1 ;; --undo) UNDO=1 ;; --quiet) QUIET=1 ;; --refresh) REFRESH=1 ;;
+    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
   esac
 done
-[ $((DEFAULT+HYPR+PORTAL+UNDO)) -gt 0 ] || { sed -n '2,8p' "$0"; exit 1; }
+[ $((DEFAULT+HYPR+PORTAL+UNDO+REFRESH)) -gt 0 ] || { sed -n '2,9p' "$0"; exit 1; }
 say() { [ "$QUIET" = 1 ] || echo "$@"; }
 
-add_block() {  # file snippet
-  grep -qF -- "$BEGIN" "$1" 2>/dev/null && return 0
+add_block() {  # file snippet (replaces an older block)
+  del_block "$1"
   mkdir -p "$(dirname "$1")"
   { echo; echo "$BEGIN"; cat "$2"; echo "$END"; } >> "$1"
 }
@@ -40,7 +41,7 @@ owned() { [ -f "$1" ] && grep -q '^# files4hyprland' "$1"; }
 
 if [ "$UNDO" = 1 ]; then
   del_block "$H/bindings.lua"; del_block "$H/looknfeel.lua"
-  owned "$P/config" && rm -f "$P/config" "$P/files-tui-wrapper.sh"
+  owned "$P/config" && rm -f "$P/config" "$P/files4hyprland-wrapper.sh"
   owned "$PC" && rm -f "$PC"
   if [ -f "$MIME" ] && grep -q '^inode/directory=files4hyprland.desktop' "$MIME"; then
     sed -i '/^inode\/directory=files4hyprland.desktop/d' "$MIME"
@@ -49,6 +50,12 @@ if [ "$UNDO" = 1 ]; then
   systemctl --user try-restart xdg-desktop-portal xdg-desktop-portal-termfilechooser >/dev/null 2>&1 || true
   say "Files4Hyprland user settings removed."
   exit 0
+fi
+
+if [ "$REFRESH" = 1 ]; then
+  grep -qF -- "$BEGIN" "$H/bindings.lua" 2>/dev/null && HYPR=1
+  owned "$P/config" && PORTAL=1
+  grep -q '^inode/directory=files4hyprland.desktop' "$MIME" 2>/dev/null && DEFAULT=1
 fi
 
 if [ "$DEFAULT" = 1 ]; then
@@ -68,8 +75,8 @@ if [ "$PORTAL" = 1 ]; then
     [ -x /usr/lib/xdg-desktop-portal-termfilechooser ] || \
     say "Note: install xdg-desktop-portal-termfilechooser (AUR) for this to take effect."
   mkdir -p "$P" "$(dirname "$PC")"
-  install -m755 "$SHARE/portal/files-tui-wrapper.sh" "$P/files-tui-wrapper.sh"
-  sed "s|@WRAPPER@|$P/files-tui-wrapper.sh|" "$SHARE/portal/config.in" > "$P/config"
+  install -m755 "$SHARE/portal/files4hyprland-wrapper.sh" "$P/files4hyprland-wrapper.sh"
+  sed "s|@WRAPPER@|$P/files4hyprland-wrapper.sh|" "$SHARE/portal/config.in" > "$P/config"
   install -m644 "$SHARE/portal/hyprland-portals.conf" "$PC"
   systemctl --user restart xdg-desktop-portal xdg-desktop-portal-termfilechooser >/dev/null 2>&1 || true
   say "File chooser portal configured."
