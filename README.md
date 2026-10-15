@@ -17,7 +17,7 @@ A mouse-friendly terminal file manager with an Explorer-like layout, built with
 Requires Python 3.11+, `xdg-utils`, `udisks2` and `glib2` (`gio`), and a Nerd Font.
 
 ```bash
-git clone https://github.com/<you>/Files4Hyprland && cd Files4Hyprland
+git clone https://github.com/Fanikalin/Files4Hyprland && cd Files4Hyprland
 ./install.sh              # app + "Files" launcher entry, default folder handler
 ./install.sh --hypr       # + SUPER+SHIFT+F binding and a floating rule (Omarchy/Hyprland)
 ./install.sh --portal     # + use as the system file chooser (see below)
