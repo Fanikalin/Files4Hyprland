@@ -32,16 +32,23 @@ It keeps the btop-like look of panels with outlines, and follows your desktop:
 
 ## Install (Arch Linux)
 
-Download and install the package from the latest
-[release](https://github.com/Fanikalin/Files4Hyprland/releases/latest):
+Files4Hyprland has its own signed pacman repository, so `pacman -Syu` (and `omarchy update`)
+keep it up to date. One-time setup: trust the release key, add the repository, install.
 
 ```bash
-cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v2.3.0/files4hyprland-2.3.0-1-x86_64.pkg.tar.zst
-sudo pacman -U ./files4hyprland-2.3.0-1-x86_64.pkg.tar.zst
+curl -fsSL https://raw.githubusercontent.com/Fanikalin/Files4Hyprland/main/data/release-key.asc | sudo pacman-key --add -
+sudo pacman-key --lsign-key 7BCE8A6E07649D86609D94C859DDBAF65426F382
+printf '\n[files4hyprland]\nServer = https://github.com/Fanikalin/Files4Hyprland/releases/download/repo\n' | sudo tee -a /etc/pacman.conf
+sudo pacman -Sy files4hyprland
 ```
 
-(`pacman -U <url>` directly does not work because release packages are not GPG-signed and pacman
-requires a `.sig` for remote files; installing a downloaded file is fine.)
+Packages are signed with the release key (fingerprint `7BCE 8A6E 0764 9D86 609D  94C8 59DD BAF6 5426 F382`),
+and pacman refuses anything that isn't. To stop using the repository, delete the `[files4hyprland]`
+section from `/etc/pacman.conf` and run `sudo pacman-key --delete 7BCE8A6E07649D86609D94C859DDBAF65426F382`.
+
+Without the repository you can still install a single release by hand (no automatic updates):
+download `files4hyprland-*.pkg.tar.zst` from the [latest release](https://github.com/Fanikalin/Files4Hyprland/releases/latest)
+and run `sudo pacman -U ./files4hyprland-*.pkg.tar.zst`.
 
 **Files** appears in the application menu. To also make it the default folder handler, add
 `SUPER+SHIFT+F` (Omarchy) and use it as the file-chooser dialog, run once as your user:
