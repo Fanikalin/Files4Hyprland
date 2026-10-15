@@ -15,7 +15,7 @@ cp PKGBUILD files4hyprland.install "$out/"
   && curl -fsSL -o "files4hyprland-$ver.tar.gz" "https://github.com/$REPO/archive/refs/tags/v$ver.tar.gz" \
   && sed -i "s/^sha256sums=.*/sha256sums=('$(sha256sum "files4hyprland-$ver.tar.gz" | cut -d' ' -f1)')/" PKGBUILD \
   && makepkg -f --noconfirm --nodeps )
-pkg=$(ls "$out"/files4hyprland-*.pkg.tar.zst)
+pkg=$(ls "$out"/files4hyprland-[0-9]*.pkg.tar.zst)
 
 if gh release view "v$ver" --repo "$REPO" >/dev/null 2>&1; then
   gh release upload "v$ver" --repo "$REPO" --clobber "$pkg"
