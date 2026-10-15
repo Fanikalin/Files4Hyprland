@@ -1,0 +1,2 @@
+#!/bin/bash
+exec "$HOME/.local/share/files-tui/venv/bin/python" "$HOME/.local/share/files-tui/files.py" "$@"

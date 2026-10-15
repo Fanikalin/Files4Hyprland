@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+GenericName=File Manager
+Comment=Terminal file manager (TUI)
+Exec=omarchy-launch-tui files-tui %f
+Icon=system-file-manager
+Terminal=false
+Categories=Utility;Core;System;FileTools;FileManager;
+Keywords=files;file manager;explorer;folder;directory;файлы;проводник;папки;
+MimeType=inode/directory;
