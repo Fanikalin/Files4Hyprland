@@ -41,7 +41,7 @@ owned() { [ -f "$1" ] && grep -q '^# files4hyprland' "$1"; }
 
 if [ "$UNDO" = 1 ]; then
   del_block "$H/bindings.lua"; del_block "$H/looknfeel.lua"
-  owned "$P/config" && rm -f "$P/config" "$P/files4hyprland-wrapper.sh"
+  owned "$P/config" && rm -f "$P/config" "$P/files4hyprland-wrapper.sh" "$P/files-tui-wrapper.sh"
   owned "$PC" && rm -f "$PC"
   if [ -f "$MIME" ] && grep -q '^inode/directory=files4hyprland.desktop' "$MIME"; then
     sed -i '/^inode\/directory=files4hyprland.desktop/d' "$MIME"
@@ -75,6 +75,7 @@ if [ "$PORTAL" = 1 ]; then
     [ -x /usr/lib/xdg-desktop-portal-termfilechooser ] || \
     say "Note: install xdg-desktop-portal-termfilechooser (AUR) for this to take effect."
   mkdir -p "$P" "$(dirname "$PC")"
+  rm -f "$P/files-tui-wrapper.sh"  # left by 1.x
   install -m755 "$SHARE/portal/files4hyprland-wrapper.sh" "$P/files4hyprland-wrapper.sh"
   sed "s|@WRAPPER@|$P/files4hyprland-wrapper.sh|" "$SHARE/portal/config.in" > "$P/config"
   install -m644 "$SHARE/portal/hyprland-portals.conf" "$PC"
