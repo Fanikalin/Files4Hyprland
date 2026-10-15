@@ -1,2 +1,2 @@
-#!/bin/bash
-exec "$HOME/.local/share/files-tui/venv/bin/python" "$HOME/.local/share/files-tui/files.py" "$@"
+#!/bin/sh
+exec python3 /usr/lib/files4hyprland/files.py "$@"

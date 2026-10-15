@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Called by xdg-desktop-portal-termfilechooser; opens the Files TUI as a file chooser.
+# Called by xdg-desktop-portal-termfilechooser; opens Files4Hyprland as a file chooser.
 # Args: multiple directory save path out debug
 multiple="$1"; directory="$2"; save="$3"; path="$4"; out="$5"; debug="$6"
 [ "$debug" = 1 ] && set -x
@@ -14,7 +14,7 @@ rm -f "$done"
 : > "$out"
 
 setsid -f uwsm-app -- xdg-terminal-exec --app-id=org.omarchy.files-picker.TUI.float \
-  -e "$HOME/.local/bin/files-tui" --pick "$mode" --out "$out" --done "$done" "$path" >/dev/null 2>&1
+  -e files-tui --pick "$mode" --out "$out" --done "$done" "$path" >/dev/null 2>&1
 
 # wait (up to 1h) until the picker exits
 i=0

@@ -1,9 +1,10 @@
 [Desktop Entry]
 Type=Application
+Version=1.0
 Name=Files
 GenericName=File Manager
-Comment=Terminal file manager (TUI)
-Exec=omarchy-launch-tui files-tui %f
+Comment=Mouse-friendly terminal file manager
+Exec=files4hyprland-open %f
 Icon=system-file-manager
 Terminal=false
 Categories=Utility;Core;System;FileTools;FileManager;

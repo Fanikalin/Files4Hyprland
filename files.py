@@ -373,19 +373,19 @@ class FilesApp(App):
     #savename { display: none; width: 40; border: none; background: $panel; height: 1; padding: 0 1; margin: 0 1 0 0; }
     #body { height: 1fr; }
     #side { width: 28; border: round $primary 50%; border-title-color: $primary; background: $background; }
-    #side:focus-within { border: round $primary; }
+    #side:focus-within, #side:hover { border: round $primary; }
     #main { width: 1fr; border: round $primary 50%; border-title-color: $primary; }
-    #main:focus-within { border: round $primary; }
+    #main:focus-within, #main:hover { border: round $primary; }
     #status { height: 1; padding: 0 1; color: $text-muted; text-wrap: nowrap; text-overflow: clip; }
     Sidebar { background: transparent; border: none; padding: 0; height: 1fr; scrollbar-size-vertical: 1; }
     Sidebar > .option-list--option-highlighted { background: $panel; color: $primary; text-style: bold; }
-    Sidebar > .option-list--option-hover { background: $surface; }
+    Sidebar > .option-list--option-hover { background: transparent; }
     Sidebar > .option-list--option-disabled { color: $text-muted; text-style: none; }
     FileTable { background: $background; border: none; padding: 0; height: 1fr; scrollbar-size-vertical: 1; }
     FileTable > .datatable--header { background: $surface; color: $primary; text-style: bold; }
-    FileTable > .datatable--header-hover { background: $panel; color: $primary; }
     FileTable > .datatable--cursor { background: $panel; color: $primary; text-style: bold; }
-    FileTable > .datatable--hover { background: $surface; }
+    FileTable > .datatable--hover { background: transparent; }
+    FileTable > .datatable--header-hover { background: $surface; }
     FileTable > .datatable--fixed-cursor { background: $panel; }
     FileTable:focus > .datatable--cursor { background: $primary 30%; color: $foreground; text-style: bold; }
     """
@@ -647,22 +647,22 @@ class FilesApp(App):
             self.query_one("#actions", Static).update(" ".join([
                 link("app.choose", f" {label} ", "b $primary on $panel"),
                 link("app.cancel_pick", " \uf00d Cancel ", "$primary on $panel"),
-                btn("new_folder", "\uf07b+ New folder"),
-                btn("toggle_hidden", "\uf06e Hidden: " + ("on" if self.show_hidden else "off")),
+                btn("new_folder", "\uf07b+"),
+                btn("toggle_hidden", "\uf06e" if self.show_hidden else "\uf070"),
                 f"[dim] {hint}[/]",
             ]))
             return
         has_sel = bool(self.targets())
         paste_ok = self.clip is not None
         items = [
-            btn("new_folder", "\uf07b+ New folder"),
-            btn("new_file", "\uf15b+ New file"),
-            btn("cut", "\uf0c4 Cut", has_sel),
-            btn("copy", "\uf0c5 Copy", has_sel),
-            btn("paste", "\uf0ea Paste", paste_ok),
-            btn("rename", "\uf044 Rename", has_sel),
-            btn("delete", "\uf1f8 Delete", has_sel),
-            btn("toggle_hidden", "\uf06e Hidden: " + ("on" if self.show_hidden else "off")),
+            btn("new_folder", "\uf07b+"),
+            btn("new_file", "\uf15b+"),
+            btn("cut", "\uf0c4", has_sel),
+            btn("copy", "\uf0c5", has_sel),
+            btn("paste", "\uf0ea", paste_ok),
+            btn("rename", "\uf044", has_sel),
+            btn("delete", "\uf1f8", has_sel),
+            btn("toggle_hidden", "\uf06e" if self.show_hidden else "\uf070"),
         ]
         self.query_one("#actions", Static).update(" ".join(items))
 

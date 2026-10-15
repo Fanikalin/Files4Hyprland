@@ -1,3 +1,4 @@
+# files4hyprland
 [filechooser]
 cmd=@WRAPPER@
 default_dir=$HOME
