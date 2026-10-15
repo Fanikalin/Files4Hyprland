@@ -13,7 +13,7 @@ optdepends=(
 )
 install=files4hyprland.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('a8a016ca9a5e1b925091d6323fb73a4239982f366dba66008b5a35b9fdbf8381')
+sha256sums=('223dbc93918a6bd401b7040ce3393e31bd9a71a83d067b5e6f28d810afc47bfe')
 
 package() {
   cd "Files4Hyprland-$pkgver"
