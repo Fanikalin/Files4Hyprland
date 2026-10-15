@@ -185,6 +185,24 @@ def read_devices() -> list[dict]:
 
 
 # --------------------------------------------------------------------------- widgets
+class HoverFrame:
+    """Mixin: outline the parent panel while the pointer is over this widget.
+
+    Done with enter/leave events and inline styles instead of a CSS `:hover` rule,
+    because Textual re-applies a `:hover` rule's styles on every mouse-move event.
+    """
+
+    def on_enter(self, event: events.Enter) -> None:
+        panel = self.parent
+        if panel is not None:
+            panel.styles.border = ("round", self.app.primary)
+
+    def on_leave(self, event: events.Leave) -> None:
+        panel = self.parent
+        if panel is not None:
+            panel.styles.clear_rule("border")
+
+
 class LinkBar(Static):
     """Static whose [@click=...] links double as drop targets."""
 
@@ -201,7 +219,7 @@ class LinkBar(Static):
             event.stop()
 
 
-class FileTable(DataTable):
+class FileTable(HoverFrame, DataTable):
     """DataTable with Explorer-like mouse handling."""
 
     def _row(self, event) -> int | None:
@@ -214,8 +232,12 @@ class FileTable(DataTable):
             self.app.drag_prepare(row, event)
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
-        t = self.app.target_for_row(self._row(event))
-        self.app.drag_hover(event, t, (t.name or "/") if t else "")
+        # Skip DataTable's hover tracking (re-renders rows on every motion) unless dragging.
+        event.prevent_default()
+        if self.app.drag:
+            DataTable._on_mouse_move(self, event)
+            t = self.app.target_for_row(self._row(event))
+            self.app.drag_hover(event, t, (t.name or "/") if t else "")
 
     def on_mouse_up(self, event: events.MouseUp) -> None:
         if self.app.drag_drop(event, self.app.target_for_row(self._row(event))):
@@ -256,7 +278,7 @@ class FileTable(DataTable):
                 self.post_message(self.Clicked(row, event.ctrl, event.shift))
 
 
-class Sidebar(OptionList):
+class Sidebar(HoverFrame, OptionList):
     def _target(self, event) -> tuple[Path | None, bool, str]:
         idx = event.style.meta.get("option")
         if idx is None or not (0 <= idx < self.option_count):
@@ -272,8 +294,11 @@ class Sidebar(OptionList):
         return None, False, ""
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
-        t, trash, label = self._target(event)
-        self.app.drag_hover(event, t, label, trash)
+        event.prevent_default()  # no hover tracking unless dragging
+        if self.app.drag:
+            OptionList._on_mouse_move(self, event)
+            t, trash, label = self._target(event)
+            self.app.drag_hover(event, t, label, trash)
 
     def on_mouse_up(self, event: events.MouseUp) -> None:
         t, trash, _ = self._target(event)
@@ -431,9 +456,9 @@ class FilesApp(App):
     #savename { display: none; width: 40; border: none; background: $panel; height: 1; padding: 0 1; margin: 0 1 0 0; }
     #body { height: 1fr; }
     #side { width: 28; border: round $primary 50%; border-title-color: $primary; background: $background; }
-    #side:focus-within, #side:hover { border: round $primary; }
+    #side:focus-within { border: round $primary; }
     #main { width: 1fr; border: round $primary 50%; border-title-color: $primary; }
-    #main:focus-within, #main:hover { border: round $primary; }
+    #main:focus-within { border: round $primary; }
     #status { height: 1; padding: 0 1; color: $text-muted; text-wrap: nowrap; text-overflow: clip; }
     Sidebar { background: transparent; border: none; padding: 0; height: 1fr; scrollbar-size-vertical: 1; }
     Sidebar > .option-list--option-highlighted { background: $panel; color: $primary; text-style: bold; }
@@ -449,6 +474,7 @@ class FilesApp(App):
     .-dragging Sidebar > .option-list--option-hover { background: $primary 30%; }
     Screen { layers: base overlay; }
     Screen > * { layer: base; }
+    #rename { layer: overlay; display: none; height: 1; border: none; padding: 0 1; background: $panel; color: $foreground; }
     #ghost { layer: overlay; display: none; width: auto; height: 1; padding: 0 1; background: $primary; color: $background; text-style: bold; }
     FileTable > .datatable--header-hover { background: $surface; }
     FileTable > .datatable--fixed-cursor { background: $panel; }
@@ -491,6 +517,8 @@ class FilesApp(App):
         self.picked = False
         self.drag: dict | None = None
         self.drag_ended = 0.0
+        self.renaming: Entry | None = None
+        self._skip_capture = False
         self.tabs: list[TabState] = [TabState(start, cursor=select)]
         self.cur = 0
         self.show_hidden = False
@@ -507,6 +535,7 @@ class FilesApp(App):
     def compose(self) -> ComposeResult:
         yield LinkBar(id="tabs")
         yield Static(id="ghost")
+        yield Input(id="rename")
         with Horizontal(id="nav"):
             yield Static(id="navbtns")
             yield LinkBar(id="crumbs")
@@ -587,6 +616,7 @@ class FilesApp(App):
         t.selected.clear()
         t.filter = ""
         t.cursor = select
+        self._skip_capture = True
         t.anchor = None
         self.query_one("#search", Input).value = ""
         self.refresh_all()
@@ -748,7 +778,9 @@ class FilesApp(App):
     def refresh_listing(self) -> None:
         t = self.tab
         table = self.query_one(FileTable)
-        if table.row_count and 0 <= table.cursor_row < len(self.view):
+        if self._skip_capture:
+            self._skip_capture = False
+        elif table.row_count and 0 <= table.cursor_row < len(self.view):
             t.cursor = self.view[table.cursor_row].name
         try:
             entries = list_dir(t.path, self.show_hidden)
@@ -1274,6 +1306,8 @@ class FilesApp(App):
             self.query_one(FileTable).focus()
         elif event.input.id == "savename":
             self.action_choose()
+        elif event.input.id == "rename":
+            self.finish_rename(True)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "search" and event.value != self.tab.filter:
@@ -1285,6 +1319,9 @@ class FilesApp(App):
         self.query_one("#search", Input).focus()
 
     def on_key(self, event: events.Key) -> None:
+        if event.key == "escape" and self.renaming is not None:
+            self.finish_rename(False)
+            return
         if event.key == "escape" and self.drag:
             self.drag_end()
             return
@@ -1379,59 +1416,76 @@ class FilesApp(App):
         self.push_screen(ConfirmScreen(f"Move {escape(what)} to Trash?"), done)
 
     def action_rename(self) -> None:
+        """Rename in place: an input appears over the file name."""
         cur = self.current_entry()
         if not cur:
             return
+        table = self.query_one(FileTable)
+        row = table.cursor_row
+        box = self.query_one("#rename", Input)
+        region = table.region
+        y = region.y + 1 + row - table.scroll_offset.y
+        if y <= region.y or y >= region.y + region.height:
+            return
+        name_w = table.columns["name"].get_render_width(table) if "name" in table.columns else region.width - 30
+        box.styles.offset = (region.x + 3, y)
+        box.styles.width = max(12, name_w)
+        self.renaming = cur
+        box.value = cur.name
+        box.display = True
+        box.focus()
+        stem = Path(cur.name).stem if not cur.is_dir else cur.name
+        end = len(stem) or len(cur.name)
+        self.call_after_refresh(lambda: setattr(box, "selection", type(box.selection)(0, end)))
 
-        def done(name: str | None) -> None:
-            if not name or name == cur.name:
-                return
-            if "/" in name:
-                self.notify("Name can't contain '/'", severity="error")
-                return
-            new = cur.path.with_name(name)
-            if new.exists():
-                self.notify(f"'{name}' already exists", severity="error")
-                return
-            try:
-                cur.path.rename(new)
-            except OSError as exc:
-                self.notify(str(exc), severity="error")
-                return
-            self.tab.selected.clear()
-            self.tab.cursor = name
-            self.refresh_listing()
+    def finish_rename(self, commit: bool) -> None:
+        cur, self.renaming = self.renaming, None
+        box = self.query_one("#rename", Input)
+        name = box.value.strip()
+        box.display = False
+        self.query_one(FileTable).focus()
+        if not commit or cur is None or not name or name == cur.name:
+            return
+        if "/" in name:
+            self.notify("Name can't contain '/'", severity="error")
+            return
+        new = cur.path.with_name(name)
+        if new.exists():
+            self.notify(f"'{name}' already exists", severity="error")
+            return
+        try:
+            cur.path.rename(new)
+        except OSError as exc:
+            self.notify(str(exc), severity="error")
+            return
+        self.tab.selected.clear()
+        self.tab.cursor = name
+        self._skip_capture = True
+        self.refresh_listing()
 
-        self.push_screen(PromptScreen("Rename", cur.name), done)
+    def on_descendant_blur(self, event) -> None:
+        if self.renaming is not None and getattr(event.widget, "id", None) == "rename":
+            self.finish_rename(False)
 
-    def _create(self, title: str, folder: bool) -> None:
-        def done(name: str | None) -> None:
-            if not name:
-                return
-            if "/" in name:
-                self.notify("Name can't contain '/'", severity="error")
-                return
-            new = self.tab.path / name
-            if new.exists():
-                self.notify(f"'{name}' already exists", severity="error")
-                return
-            try:
-                new.mkdir() if folder else new.touch()
-            except OSError as exc:
-                self.notify(str(exc), severity="error")
-                return
-            self.tab.cursor = name
-            self.tab.filter = ""
-            self.query_one("#search", Input).value = ""
-            self.refresh_listing()
-
-        self.push_screen(PromptScreen(title, "New folder" if folder else "New file.txt"), done)
+    def _create(self, base: str, folder: bool) -> None:
+        target = unique(self.tab.path / base)
+        try:
+            target.mkdir() if folder else target.touch()
+        except OSError as exc:
+            self.notify(str(exc), severity="error")
+            return
+        self.tab.cursor = target.name
+        self._skip_capture = True
+        self.tab.filter = ""
+        self.query_one("#search", Input).value = ""
+        self.refresh_listing()
+        self.call_after_refresh(self.action_rename)
 
     def action_new_folder(self) -> None:
         self._create("New folder", True)
 
     def action_new_file(self) -> None:
-        self._create("New file", False)
+        self._create("New file.txt", False)
 
     def action_toggle_hidden(self) -> None:
         self.show_hidden = not self.show_hidden
@@ -1465,9 +1519,17 @@ def main() -> None:
             name = name or p.name
         elif p.exists():
             start, select = p.parent, p.name
+    prof = None
+    if os.environ.get("FILES_PROFILE"):
+        import cProfile
+        prof = cProfile.Profile()
+        prof.enable()
     try:
         FilesApp(start.resolve(), select, args.pick, Path(args.out) if args.out else None, name).run()
     finally:
+        if prof:
+            prof.disable()
+            prof.dump_stats(os.environ["FILES_PROFILE"])
         if args.done:
             Path(args.done).touch()
 

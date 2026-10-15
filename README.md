@@ -19,8 +19,8 @@ Requires a Nerd Font for icons. Download and install the package from the latest
 [release](https://github.com/Fanikalin/Files4Hyprland/releases/latest):
 
 ```bash
-cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v1.2.0/files4hyprland-1.2.0-1-any.pkg.tar.zst
-sudo pacman -U ./files4hyprland-1.2.0-1-any.pkg.tar.zst
+cd /tmp && curl -LO https://github.com/Fanikalin/Files4Hyprland/releases/download/v1.3.0/files4hyprland-1.3.0-1-any.pkg.tar.zst
+sudo pacman -U ./files4hyprland-1.3.0-1-any.pkg.tar.zst
 ```
 
 (`pacman -U <url>` directly does not work because release packages are not GPG-signed, and pacman
