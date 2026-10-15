@@ -1,4 +1,4 @@
-# Files TUI
+# Files4Hyprland
 
 A mouse-friendly terminal file manager with an Explorer-like layout, built with
 [Textual](https://textual.textualize.io/). Made for [Omarchy](https://omarchy.org)
@@ -17,7 +17,7 @@ A mouse-friendly terminal file manager with an Explorer-like layout, built with
 Requires Python 3.11+, `xdg-utils`, `udisks2` and `glib2` (`gio`), and a Nerd Font.
 
 ```bash
-git clone https://github.com/<you>/files-tui && cd files-tui
+git clone https://github.com/<you>/Files4Hyprland && cd Files4Hyprland
 ./install.sh              # app + "Files" launcher entry, default folder handler
 ./install.sh --hypr       # + SUPER+SHIFT+F binding and a floating rule (Omarchy/Hyprland)
 ./install.sh --portal     # + use as the system file chooser (see below)
@@ -28,7 +28,7 @@ Run it with `files-tui [path]`.
 ## Use as the system file chooser
 
 Install [`xdg-desktop-portal-termfilechooser`](https://aur.archlinux.org/packages/xdg-desktop-portal-termfilechooser)
-(AUR), then run `./install.sh --portal`. Apps that use the XDG portal will open Files TUI when
+(AUR), then run `./install.sh --portal`. Apps that use the XDG portal will open Files4Hyprland when
 you press "Choose file". Running apps may need a restart. Use `files-tui --pick file|files|dir|save --out FILE`
 to try the mode by hand.
 
