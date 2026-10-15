@@ -16,7 +16,7 @@ optdepends=(
 options=('!debug')
 install=files4hyprland.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('71c2e6f4289bc80b534c0dba720026c83a179fba93c3d47d07125c5733ad60a6')
 
 build() {
   arch-meson "Files4Hyprland-$pkgver" build
