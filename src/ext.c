@@ -3,6 +3,7 @@
  *  - KDE service menus (kio/servicemenus/ in the data dirs), the format that
  *    Ark, VLC, KDE Connect, file-roller add-ons and many others install. */
 #include "app.h"
+#include <gio/gdesktopappinfo.h>
 #include <string.h>
 
 typedef struct {
@@ -99,6 +100,30 @@ static void load_service_file(const char *path, GList *targets, GPtrArray *cts, 
     }
 }
 
+static gint cmp_apps(gconstpointer x, gconstpointer y) {
+    return g_utf8_collate(g_app_info_get_display_name((GAppInfo *)x), g_app_info_get_display_name((GAppInfo *)y));
+}
+
+static gboolean takes_files(GAppInfo *ai) {
+    const char *cmd = g_app_info_get_commandline(ai);
+    return cmd && (strstr(cmd, "%f") || strstr(cmd, "%F") || strstr(cmd, "%u") || strstr(cmd, "%U"));
+}
+
+static gboolean is_editor(GAppInfo *ai) {
+    if (!G_IS_DESKTOP_APP_INFO(ai)) return FALSE;
+    const char *cats = g_desktop_app_info_get_categories(G_DESKTOP_APP_INFO(ai));
+    return cats && (strstr(cats, "TextEditor") || strstr(cats, "IDE"));
+}
+
+static void add_app(GMenu *menu, GAppInfo *ai) {
+    Entry *e = g_new0(Entry, 1);
+    e->app = g_object_ref(ai);
+    g_ptr_array_add(entries, e);
+    g_autoptr(GMenuItem) item = g_menu_item_new(g_app_info_get_display_name(ai), NULL);
+    g_menu_item_set_action_and_target(item, "win.ext-run", "u", entries->len - 1);
+    g_menu_append_item(menu, item);
+}
+
 GMenuModel *ext_menu_build(App *a, GList *targets) {
     (void)a;
     if (entries) g_ptr_array_unref(entries);
@@ -115,23 +140,36 @@ GMenuModel *ext_menu_build(App *a, GList *targets) {
     GMenu *out = g_menu_new();
     GMenu *top = g_menu_new();
 
-    /* Open with: one file, every other application that handles its type */
+    /* Open with: applications associated with the type first, then editors and IDEs (VS Code and the like
+     * often don't register every type), then every other application that accepts files */
     if (!targets->next) {
-        GList *apps = g_app_info_get_all_for_type(cts->pdata[0]);
-        GMenu *ow = g_menu_new();
-        for (GList *l = apps; l; l = l->next) {
+        GList *assoc = g_app_info_get_all_for_type(cts->pdata[0]);
+        GHashTable *have = g_hash_table_new(g_str_hash, g_str_equal);
+        GMenu *ow = g_menu_new(), *editors = g_menu_new(), *others = g_menu_new();
+        for (GList *l = assoc; l; l = l->next) {
             GAppInfo *ai = l->data;
             if (!g_app_info_should_show(ai)) continue;
-            Entry *e = g_new0(Entry, 1);
-            e->app = g_object_ref(ai);
-            g_ptr_array_add(entries, e);
-            g_autoptr(GMenuItem) item = g_menu_item_new(g_app_info_get_display_name(ai), NULL);
-            g_menu_item_set_action_and_target(item, "win.ext-run", "u", entries->len - 1);
-            g_menu_append_item(ow, item);
+            g_hash_table_add(have, (gpointer)g_app_info_get_id(ai));
+            add_app(ow, ai);
         }
-        g_list_free_full(apps, g_object_unref);
+        GList *all = g_app_info_get_all();
+        all = g_list_sort(all, cmp_apps);
+        for (GList *l = all; l; l = l->next) {
+            GAppInfo *ai = l->data;
+            const char *id = g_app_info_get_id(ai);
+            if (!id || g_str_equal(id, "files4hyprland.desktop") || g_hash_table_contains(have, id) || !g_app_info_should_show(ai) || !takes_files(ai)) continue;
+            if (is_editor(ai)) add_app(editors, ai);
+            else add_app(others, ai);
+        }
+        if (g_menu_model_get_n_items(G_MENU_MODEL(editors))) g_menu_append_section(ow, NULL, G_MENU_MODEL(editors));
+        if (g_menu_model_get_n_items(G_MENU_MODEL(others))) g_menu_append_submenu(ow, "Other applications", G_MENU_MODEL(others));
+        g_list_free_full(all, g_object_unref);
+        g_list_free_full(assoc, g_object_unref);
+        g_hash_table_unref(have);
         if (g_menu_model_get_n_items(G_MENU_MODEL(ow))) g_menu_append_submenu(top, "Open with", G_MENU_MODEL(ow));
         g_object_unref(ow);
+        g_object_unref(editors);
+        g_object_unref(others);
     }
 
     GHashTable *subs = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);

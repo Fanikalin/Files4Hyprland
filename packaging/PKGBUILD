@@ -1,17 +1,22 @@
 # Maintainer: Fanikalin
 pkgname=files4hyprland
-pkgver=2.4.0
+pkgver=2.5.0
 pkgrel=1
 pkgdesc='Light native (GTK4/C) file manager for Hyprland/Omarchy: sidebar, tabs, system drag and drop'
 arch=('x86_64' 'aarch64')
 url='https://github.com/Fanikalin/Files4Hyprland'
 license=('MIT')
-depends=('gtk4' 'glib2' 'gvfs' 'udisks2' 'xdg-utils')
+depends=('gtk4' 'glib2' 'gdk-pixbuf2' 'gvfs' 'udisks2' 'xdg-utils')
 makedepends=('meson' 'gcc' 'pkgconf')
 optdepends=(
   'xdg-desktop-portal-termfilechooser: use as the system "choose a file" dialog (AUR)'
   'xdg-terminal-exec: "Open terminal here"'
   'ttf-jetbrains-mono-nerd: icons'
+  'ffmpegthumbnailer: video previews in tiles'
+  'poppler: PDF previews in tiles'
+  'gvfs-smb: Windows/Samba shares in Network'
+  'gvfs-mtp: phones'
+  'gvfs-nfs: NFS shares in Network'
 )
 options=('!debug')
 install=files4hyprland.install

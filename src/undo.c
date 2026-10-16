@@ -185,7 +185,7 @@ static void replay_done(GObject *s, GAsyncResult *res, gpointer data) {
 }
 
 void undo_run(App *a, gboolean redo) {
-    if (a->renaming) gtk_widget_grab_focus(a->view); /* cancels the in-place rename */
+    if (a->renaming) view_focus(a); /* cancels the in-place rename */
     GQueue *from = redo ? &a->redo : &a->undo;
     Op *op = g_queue_pop_head(from);
     if (!op) {

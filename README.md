@@ -18,10 +18,19 @@ It keeps the btop-like look of panels with outlines, and follows your desktop:
 - Location bar: back / forward / up / refresh, clickable path, editable path (`Ctrl+L`)
 - Search covers subfolders: results stream in from a background thread, each with its subfolder shown
   dimmed (`files4hyprland --search TEXT [PATH]` opens with a search)
-- Disks in the sidebar show used / total and a usage bar from blue to red; right-click a file or folder
+- **Tiles view** (right-click empty space > View > Tiles / Large tiles): previews of images, videos,
+  PDFs and the first lines of text files (videos need `ffmpegthumbnailer` or `ffmpeg`, PDFs `poppler`)
+- **Network**: scans your local networks for SMB, SFTP, FTP and NFS machines and lists them with address
+  and protocol; type a server (`192.168.1.10`, `smb://host/share`, `sftp://user@host`) to connect, the
+  ones you type are remembered. Needs the matching gvfs backends (`gvfs-smb`, `gvfs-nfs`, ...)
+- Phones (MTP/PTP) appear as "Phone", "Phone 1", ... in the Devices list
+- Every disk has its own color (derived from its name, so it stays the same on any machine; the system
+  disk uses the theme's second color) shown as a line on the left and as its usage bar, which turns red
+  when less than 10% is free
+- Disks in the sidebar show used / total and a usage bar; right-click a file or folder
   and choose **Pin to sidebar** to keep it in the list (**Unpin** removes it)
-- Right-click menus: compact, with **Open with**, **Open as program** for `.sh` scripts, entries added by
-  other programs (KDE service menus in `kio/servicemenus`), and on empty space **View** (row size)
+- Right-click menus: compact, with **Open with** (associated apps, editors such as VS Code, and every other app), **Open as program** for `.sh` scripts, entries added by
+  other programs (KDE service menus in `kio/servicemenus`), and on empty space **View** (tiles or details, row size)
   and **Sort by** submenus; the choice is remembered in `~/.config/files4hyprland/settings.ini`
 - Default folders (Downloads, Documents, ...) and sidebar sections are shown in the system language
   (ru, uk, de, fr, es)

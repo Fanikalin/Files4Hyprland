@@ -37,6 +37,11 @@ typedef struct {
     GtkWidget *sidebar; /* GtkListBox */
     GtkWidget *view;    /* GtkColumnView */
     GtkColumnViewColumn *col_name, *col_size, *col_mod;
+    GtkWidget *grid;       /* GtkGridView: tiles mode, same model as the column view */
+    GtkWidget *view_stack; /* details | tiles */
+    GtkWidget *pages;      /* files | network */
+    GtkWidget *net_page;
+    gboolean tiles;
     GtkWidget *status, *toast_rev, *toast_label;
     GtkWidget *item_menu, *empty_menu, *side_menu;
     GHashTable *buttons; /* action name -> GtkWidget* (sensitivity) */
@@ -81,7 +86,7 @@ typedef struct {
     /* theme */
     GtkCssProvider *css;
     GFileMonitor *theme_mon;
-    char accent[32];
+    char accent[32], accent2[32], red[32];
     gint64 theme_sig;
 } App;
 
@@ -120,6 +125,17 @@ void sidebar_mark_current(App *a);
 gboolean sidebar_is_pinned(GFile *f);
 void sidebar_pin(App *a, GFile *f);
 void sidebar_unpin(App *a, GFile *f);
+void sidebar_style(App *a); /* disk colors follow the theme */
+
+/* thumb.c: previews for tiles (images, videos, PDFs, text); the tile must carry "prev", "pic", "text" data */
+void thumb_load(GtkWidget *tile, GFileInfo *info, int size);
+
+/* net.c: the Network page and opening remote locations */
+GtkWidget *network_new(App *a);
+void network_scan(App *a);
+gboolean is_network(GFile *f);
+void net_open(App *a, GFile *f);   /* mounts if needed, then navigates */
+guint network_count(void);
 
 /* ext.c: entries other programs add to the context menu */
 GMenuModel *ext_menu_build(App *a, GList *targets); /* NULL when there is nothing to add */
@@ -145,6 +161,7 @@ void view_begin_rename(App *a);
 void view_try_pending(App *a);
 void view_focus_first(App *a);
 void view_sync_sort_actions(App *a);
+void view_focus(App *a);
 void view_set_row_size(App *a, const char *size);
 void view_set_sort(App *a, SortCol col, gboolean desc);
 

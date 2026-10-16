@@ -100,16 +100,35 @@ void view_sync_sort_actions(App *a) {
 
 void view_set_row_size(App *a, const char *size) {
     g_strlcpy(a->row_size, size, sizeof a->row_size);
+    gboolean tiles = g_str_has_prefix(size, "tiles");
+    gboolean changed = tiles != a->tiles;
+    a->tiles = tiles;
     gtk_widget_remove_css_class(a->view, "rows-small");
     gtk_widget_remove_css_class(a->view, "rows-large");
     if (g_str_equal(size, "small")) gtk_widget_add_css_class(a->view, "rows-small");
     else if (g_str_equal(size, "large")) gtk_widget_add_css_class(a->view, "rows-large");
+    gtk_stack_set_visible_child_name(GTK_STACK(a->view_stack), tiles ? "tiles" : "details");
+    if (tiles) gtk_grid_view_set_min_columns(GTK_GRID_VIEW(a->grid), 1);
     view_sync_sort_actions(a);
     settings_save(a);
+    if (tiles) {
+        /* rebuild the tiles at the new size */
+        GtkSelectionModel *m = GTK_SELECTION_MODEL(a->sel);
+        gtk_grid_view_set_model(GTK_GRID_VIEW(a->grid), NULL);
+        gtk_grid_view_set_model(GTK_GRID_VIEW(a->grid), m);
+    }
+    if (changed && gtk_widget_get_mapped(a->view_stack)) view_focus(a);
 }
 
 /* ---------------------------------------------------------------- selection helpers */
 static void grab_view_focus(App *a);
+
+static void scroll_to(App *a, guint pos, GtkListScrollFlags f) {
+    if (a->tiles) gtk_grid_view_scroll_to(GTK_GRID_VIEW(a->grid), pos, f, NULL);
+    else gtk_column_view_scroll_to(GTK_COLUMN_VIEW(a->view), pos, NULL, f, NULL);
+}
+
+void view_focus(App *a) { gtk_widget_grab_focus(a->tiles ? a->grid : a->view); }
 
 GList *view_targets(App *a) {
     GList *out = NULL;
@@ -156,7 +175,7 @@ void view_select_name(App *a, const char *name, gboolean rename) {
     g_clear_pointer(&a->pending_select, g_free);
     a->focus_first = FALSE;
     grab_view_focus(a);
-    gtk_column_view_scroll_to(GTK_COLUMN_VIEW(a->view), pos, NULL, GTK_LIST_SCROLL_FOCUS | GTK_LIST_SCROLL_SELECT, NULL);
+    scroll_to(a, pos, GTK_LIST_SCROLL_FOCUS | GTK_LIST_SCROLL_SELECT);
     if (rename) g_timeout_add(60, rename_idle, a);
 }
 
@@ -166,7 +185,7 @@ static void grab_view_focus(App *a) {
     if (f && (f == a->addr || f == a->search || gtk_widget_is_ancestor(f, a->addr) || gtk_widget_is_ancestor(f, a->search) ||
               (a->savename && (f == a->savename || gtk_widget_is_ancestor(f, a->savename)))))
         return;
-    gtk_widget_grab_focus(a->view);
+    view_focus(a);
 }
 
 void view_focus_first(App *a) {
@@ -176,10 +195,10 @@ void view_focus_first(App *a) {
     if (g_list_model_get_n_items(G_LIST_MODEL(a->sorted)) == 0) return;
     g_autoptr(GtkBitset) set = gtk_selection_model_get_selection(GTK_SELECTION_MODEL(a->sel));
     if (!gtk_bitset_is_empty(set)) {
-        gtk_column_view_scroll_to(GTK_COLUMN_VIEW(a->view), gtk_bitset_get_minimum(set), NULL, GTK_LIST_SCROLL_FOCUS, NULL);
+        scroll_to(a, gtk_bitset_get_minimum(set), GTK_LIST_SCROLL_FOCUS);
         return;
     }
-    gtk_column_view_scroll_to(GTK_COLUMN_VIEW(a->view), 0, NULL, GTK_LIST_SCROLL_FOCUS | GTK_LIST_SCROLL_SELECT, NULL);
+    scroll_to(a, 0, GTK_LIST_SCROLL_FOCUS | GTK_LIST_SCROLL_SELECT);
 }
 
 void view_try_pending(App *a) {
@@ -201,7 +220,7 @@ void view_begin_rename(App *a) {
     if (!info) return;
     GtkWidget *cell = g_object_get_data(G_OBJECT(info), "cell");
     if (!cell) {
-        gtk_column_view_scroll_to(GTK_COLUMN_VIEW(a->view), pos, NULL, GTK_LIST_SCROLL_FOCUS, NULL);
+        scroll_to(a, pos, GTK_LIST_SCROLL_FOCUS);
         g_timeout_add(60, rename_idle, a);
         return;
     }
@@ -241,7 +260,7 @@ static void finish_rename(App *a, gboolean commit) {
     g_autofree char *name = NULL;
     if (cell) name = g_strdup(gtk_editable_get_text(GTK_EDITABLE(g_object_get_data(G_OBJECT(cell), "entry"))));
     stack_show(info, "label");
-    gtk_widget_grab_focus(a->view);
+    view_focus(a);
     if (commit && name) g_strstrip(name);
     if (commit && name && *name && !g_str_equal(name, g_file_info_get_display_name(info))) {
         if (strchr(name, '/')) toast(a, "A name can't contain “/”");
@@ -326,9 +345,16 @@ static GMenuModel *build_empty_menu(App *a) {
     GMenu *m = g_menu_new();
     GMenu *s0 = g_menu_new(), *s1 = g_menu_new(), *s2 = g_menu_new(), *s3 = g_menu_new();
     GMenu *view = g_menu_new(), *sort = g_menu_new();
-    append_radio(view, "Large rows", "win.view-size", "large");
-    append_radio(view, "Medium rows", "win.view-size", "medium");
-    append_radio(view, "Small rows", "win.view-size", "small");
+    GMenu *tiles = g_menu_new(), *details = g_menu_new();
+    append_radio(tiles, "Large tiles", "win.view-size", "tiles-large");
+    append_radio(tiles, "Tiles", "win.view-size", "tiles");
+    g_menu_append_section(view, NULL, G_MENU_MODEL(tiles));
+    append_radio(details, "Details, large rows", "win.view-size", "large");
+    append_radio(details, "Details", "win.view-size", "medium");
+    append_radio(details, "Details, compact", "win.view-size", "small");
+    g_menu_append_section(view, NULL, G_MENU_MODEL(details));
+    g_object_unref(tiles);
+    g_object_unref(details);
     g_menu_append_submenu(s0, "View", G_MENU_MODEL(view));
     append_radio(sort, "Name", "win.sort-by", "name");
     append_radio(sort, "Size", "win.sort-by", "size");
@@ -520,6 +546,101 @@ static GtkColumnViewColumn *add_column(App *a, const char *title, GCallback setu
     return c;
 }
 
+/* ---------------------------------------------------------------- tiles */
+static void tile_metrics(App *a, int *pw, int *ph, int *chars, int *req) {
+    gboolean big = g_str_equal(a->row_size, "tiles-large");
+    *pw = big ? 184 : 120;
+    *ph = big ? 138 : 90;
+    *chars = big ? 24 : 15;
+    *req = big ? 256 : 160; /* thumbnail edge */
+}
+
+static void tile_setup(GtkSignalListItemFactory *f, GtkListItem *li, gpointer data) {
+    (void)f;
+    App *a = data;
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_add_css_class(box, "tile");
+    GtkWidget *prev = gtk_stack_new();
+    gtk_widget_add_css_class(prev, "tile-prev");
+    gtk_widget_set_halign(prev, GTK_ALIGN_CENTER);
+    GtkWidget *glyph = gtk_label_new(NULL);
+    gtk_widget_add_css_class(glyph, "tile-glyph");
+    GtkWidget *pic = gtk_picture_new();
+    gtk_picture_set_content_fit(GTK_PICTURE(pic), GTK_CONTENT_FIT_CONTAIN);
+    gtk_picture_set_can_shrink(GTK_PICTURE(pic), TRUE);
+    GtkWidget *text = gtk_label_new(NULL);
+    gtk_widget_add_css_class(text, "tile-text");
+    gtk_label_set_xalign(GTK_LABEL(text), 0);
+    gtk_label_set_yalign(GTK_LABEL(text), 0);
+    gtk_stack_add_named(GTK_STACK(prev), glyph, "glyph");
+    gtk_stack_add_named(GTK_STACK(prev), pic, "pic");
+    gtk_stack_add_named(GTK_STACK(prev), text, "text");
+
+    GtkWidget *stack = gtk_stack_new();
+    GtkWidget *l = gtk_label_new(NULL);
+    gtk_label_set_justify(GTK_LABEL(l), GTK_JUSTIFY_CENTER);
+    gtk_label_set_wrap(GTK_LABEL(l), TRUE);
+    gtk_label_set_wrap_mode(GTK_LABEL(l), PANGO_WRAP_WORD_CHAR);
+    gtk_label_set_lines(GTK_LABEL(l), 2);
+    gtk_label_set_ellipsize(GTK_LABEL(l), PANGO_ELLIPSIZE_END);
+    GtkWidget *e = gtk_entry_new();
+    gtk_stack_add_named(GTK_STACK(stack), l, "label");
+    gtk_stack_add_named(GTK_STACK(stack), e, "entry");
+    gtk_box_append(GTK_BOX(box), prev);
+    gtk_box_append(GTK_BOX(box), stack);
+    g_object_set_data(G_OBJECT(box), "glyph", glyph);
+    g_object_set_data(G_OBJECT(box), "label", l);
+    g_object_set_data(G_OBJECT(box), "stack", stack);
+    g_object_set_data(G_OBJECT(box), "entry", e);
+    g_object_set_data(G_OBJECT(box), "prev", prev);
+    g_object_set_data(G_OBJECT(box), "pic", pic);
+    g_object_set_data(G_OBJECT(box), "text", text);
+    g_signal_connect(e, "activate", G_CALLBACK(on_entry_activate), a);
+    GtkEventController *k = gtk_event_controller_key_new();
+    g_signal_connect(k, "key-pressed", G_CALLBACK(on_entry_key), a);
+    gtk_widget_add_controller(e, k);
+    GtkEventController *fc = gtk_event_controller_focus_new();
+    g_signal_connect(fc, "leave", G_CALLBACK(on_entry_leave), a);
+    gtk_widget_add_controller(e, fc);
+    cell_common(a, li, box);
+    gtk_list_item_set_child(li, box);
+}
+
+static void tile_bind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer data) {
+    (void)f;
+    App *a = data;
+    GtkWidget *box = gtk_list_item_get_child(li);
+    GFileInfo *info = gtk_list_item_get_item(li);
+    int pw, ph, chars, req;
+    tile_metrics(a, &pw, &ph, &chars, &req);
+    GtkWidget *prev = g_object_get_data(G_OBJECT(box), "prev");
+    gtk_widget_set_size_request(prev, pw, ph);
+    gtk_widget_set_size_request(box, pw + 8, -1);
+    GtkWidget *g = g_object_get_data(G_OBJECT(box), "glyph");
+    gtk_label_set_text(GTK_LABEL(g), glyph_for(info));
+    if (info_is_dir(info)) gtk_widget_add_css_class(g, "glyph-dir");
+    else gtk_widget_remove_css_class(g, "glyph-dir");
+    GtkWidget *label = g_object_get_data(G_OBJECT(box), "label");
+    gtk_label_set_max_width_chars(GTK_LABEL(label), chars);
+    g_autofree char *shown = info_is_dir(info) ? dir_display_name(info_file(info)) : NULL;
+    gtk_label_set_text(GTK_LABEL(label), shown ? shown : g_file_info_get_display_name(info));
+    gtk_stack_set_visible_child_name(GTK_STACK(g_object_get_data(G_OBJECT(box), "stack")), "label");
+    gtk_stack_set_visible_child_name(GTK_STACK(prev), "glyph");
+    g_object_set_data(G_OBJECT(info), "cell", box);
+    thumb_load(box, info, req);
+}
+
+static void tile_unbind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer data) {
+    (void)f;
+    App *a = data;
+    GFileInfo *info = gtk_list_item_get_item(li);
+    GtkWidget *box = gtk_list_item_get_child(li);
+    g_object_set_data(G_OBJECT(box), "tkey", NULL);
+    if (!info) return;
+    if (a->renaming == info) finish_rename(a, FALSE);
+    if (g_object_get_data(G_OBJECT(info), "cell") == box) g_object_set_data(G_OBJECT(info), "cell", NULL);
+}
+
 /* ---------------------------------------------------------------- activation / keys */
 static void on_activate(GtkColumnView *v, guint pos, gpointer data) {
     (void)v;
@@ -633,20 +754,40 @@ GtkWidget *view_new(App *a) {
     gtk_column_view_sort_by_column(GTK_COLUMN_VIEW(a->view), sort_column(a, a->sort_col),
                                    a->sort_desc ? GTK_SORT_DESCENDING : GTK_SORT_ASCENDING);
     g_signal_connect(gtk_column_view_get_sorter(GTK_COLUMN_VIEW(a->view)), "changed", G_CALLBACK(on_header_sort), a);
-    view_set_row_size(a, a->row_size);
 
     GtkEventController *k = gtk_event_controller_key_new();
     g_signal_connect(k, "key-pressed", G_CALLBACK(on_view_key), a);
     gtk_widget_add_controller(a->view, k);
 
-    GtkWidget *sw = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), a->view);
-    gtk_widget_set_vexpand(sw, TRUE);
-    add_drop_target(a, sw, view_dest);
-    GtkGesture *g = gtk_gesture_click_new();
-    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(g), GDK_BUTTON_SECONDARY);
-    g_signal_connect(g, "pressed", G_CALLBACK(on_empty_click), a);
-    gtk_widget_add_controller(sw, GTK_EVENT_CONTROLLER(g));
-    return sw;
+    /* tiles share the model and the selection with the details view */
+    GtkListItemFactory *tf = gtk_signal_list_item_factory_new();
+    g_signal_connect(tf, "setup", G_CALLBACK(tile_setup), a);
+    g_signal_connect(tf, "bind", G_CALLBACK(tile_bind), a);
+    g_signal_connect(tf, "unbind", G_CALLBACK(tile_unbind), a);
+    a->grid = gtk_grid_view_new(GTK_SELECTION_MODEL(g_object_ref(a->sel)), tf);
+    gtk_grid_view_set_max_columns(GTK_GRID_VIEW(a->grid), 40);
+    gtk_grid_view_set_enable_rubberband(GTK_GRID_VIEW(a->grid), FALSE);
+    gtk_widget_add_css_class(a->grid, "tiles");
+    g_signal_connect(a->grid, "activate", G_CALLBACK(on_activate), a);
+    GtkEventController *gk = gtk_event_controller_key_new();
+    g_signal_connect(gk, "key-pressed", G_CALLBACK(on_view_key), a);
+    gtk_widget_add_controller(a->grid, gk);
+
+    a->view_stack = gtk_stack_new();
+    GtkWidget *children[2] = {a->view, a->grid};
+    const char *names[2] = {"details", "tiles"};
+    for (int i = 0; i < 2; i++) {
+        GtkWidget *sw = gtk_scrolled_window_new();
+        gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), children[i]);
+        gtk_widget_set_vexpand(sw, TRUE);
+        add_drop_target(a, sw, view_dest);
+        GtkGesture *g = gtk_gesture_click_new();
+        gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(g), GDK_BUTTON_SECONDARY);
+        g_signal_connect(g, "pressed", G_CALLBACK(on_empty_click), a);
+        gtk_widget_add_controller(sw, GTK_EVENT_CONTROLLER(g));
+        gtk_stack_add_named(GTK_STACK(a->view_stack), sw, names[i]);
+    }
+    view_set_row_size(a, a->row_size);
+    return a->view_stack;
 }

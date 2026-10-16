@@ -2,6 +2,7 @@
  * monitor: mounts, unmounted volumes, mount/unmount/eject). */
 #include "app.h"
 #include <glib/gstdio.h>
+#include <math.h>
 #include <string.h>
 
 #define G_HOME ""
@@ -20,6 +21,100 @@
 static GtkListBoxRow *menu_row;
 static void add_pins(App *a);
 static guint rebuild_idle;
+
+/* ---------------------------------------------------------------- disk colors */
+/* A disk's color depends only on its name, so it stays the same on any machine.
+ * The system disk takes the theme's second color. */
+static guint32 name_hash(const char *s) {
+    guint32 h = 2166136261u;
+    for (; *s; s++) h = (h ^ (guchar)*s) * 16777619u;
+    h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+    return h;
+}
+
+static void hsl_to_rgb(double h, double s, double l, double *r, double *g, double *b) {
+    double c = (1 - fabs(2 * l - 1)) * s, hp = h / 60.0, x = c * (1 - fabs(fmod(hp, 2) - 1)), m = l - c / 2;
+    double R = 0, G = 0, B = 0;
+    if (hp < 1) { R = c; G = x; } else if (hp < 2) { R = x; G = c; } else if (hp < 3) { G = c; B = x; }
+    else if (hp < 4) { G = x; B = c; } else if (hp < 5) { R = x; B = c; } else { R = c; B = x; }
+    *r = R + m; *g = G + m; *b = B + m;
+}
+
+static double hue_of(const GdkRGBA *c, double *sat) {
+    double mx = MAX(c->red, MAX(c->green, c->blue)), mn = MIN(c->red, MIN(c->green, c->blue)), d = mx - mn, h = 0;
+    *sat = mx > 0 ? d / mx : 0;
+    if (d == 0) return 0;
+    if (mx == c->red) h = fmod((c->green - c->blue) / d, 6);
+    else if (mx == c->green) h = (c->blue - c->red) / d + 2;
+    else h = (c->red - c->green) / d + 4;
+    h *= 60;
+    return h < 0 ? h + 360 : h;
+}
+
+/* 20 hues 18° apart x 2 lightness levels; keeps clear of the system disk's hue */
+static char *disk_color(App *a, const char *name, gboolean system) {
+    GdkRGBA sys;
+    if (!gdk_rgba_parse(&sys, a->accent2)) gdk_rgba_parse(&sys, "#8d8d8d");
+    if (system) return g_strdup_printf("#%02x%02x%02x", (int)(sys.red * 255 + 0.5), (int)(sys.green * 255 + 0.5), (int)(sys.blue * 255 + 0.5));
+    guint32 h = name_hash(name);
+    guint idx = h % 20;
+    double sysat, syshue = hue_of(&sys, &sysat);
+    if (sysat > 0.25) {
+        double d = fabs(fmod(idx * 18.0 - syshue + 540, 360) - 180);
+        if (d < 14) idx = (idx + 1) % 20;
+    }
+    double l = ((h >> 8) & 1) ? 0.72 : 0.56, r, g, b;
+    hsl_to_rgb(idx * 18.0, 0.72, l, &r, &g, &b);
+    return g_strdup_printf("#%02x%02x%02x", (int)(r * 255 + 0.5), (int)(g * 255 + 0.5), (int)(b * 255 + 0.5));
+}
+
+static GtkCssProvider *dcss;
+static GHashTable *dc_seen; /* hex -> 1 */
+
+static void dcss_reload(App *a) {
+    if (!dcss) {
+        dcss = gtk_css_provider_new();
+        gtk_style_context_add_provider_for_display(gdk_display_get_default(), GTK_STYLE_PROVIDER(dcss),
+                                                   GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+    }
+    GString *c = g_string_new(NULL);
+    GHashTableIter it;
+    gpointer k;
+    g_hash_table_iter_init(&it, dc_seen);
+    while (g_hash_table_iter_next(&it, &k, NULL)) {
+        const char *hex = k;
+        g_string_append_printf(c,
+            "list row.dc-%1$s, list row.dc-%1$s.current { box-shadow: inset 3px 0 #%1$s; }\n"
+            "list row.dc-%1$s:hover { box-shadow: inset 3px 0 #%1$s, inset 0 0 0 1px alpha(#%1$s, 0.35); }\n"
+            "list row.dc-%1$s progressbar.disk progress { background: #%1$s; }\n"
+            "list row.dc-%1$s.low progressbar.disk progress { background: %2$s; }\n",
+            hex, a->red[0] ? a->red : "#e5484d");
+    }
+    gtk_css_provider_load_from_string(dcss, c->str);
+    g_string_free(c, TRUE);
+}
+
+/* the theme changed: recolor (the system disk's color and the "low space" red come from it) */
+void sidebar_style(App *a) {
+    if (dc_seen) dcss_reload(a);
+}
+
+static void style_disk(App *a, GtkWidget *row, const char *name, gboolean system) {
+    if (!dc_seen) dc_seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    g_autofree char *hex = disk_color(a, name, system);
+    const char *h = hex + 1;
+    if (!g_hash_table_contains(dc_seen, h)) {
+        g_hash_table_add(dc_seen, g_strdup(h));
+        dcss_reload(a);
+    }
+    g_autofree char *cls = g_strdup_printf("dc-%s", h);
+    gtk_widget_add_css_class(row, cls);
+}
+
+static gboolean is_phone(GFile *f) { return g_file_has_uri_scheme(f, "mtp") || g_file_has_uri_scheme(f, "gphoto2"); }
+
+/* first phone is "Phone", the next ones "Phone 1", "Phone 2" */
+static char *phone_name(guint n) { return n ? g_strdup_printf("%s %u", tr("Phone"), n) : g_strdup(tr("Phone")); }
 
 static GtkWidget *row_new(const char *glyph, const char *name, const char *extra) {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -80,9 +175,10 @@ static void set_size_cb(GObject *src, GAsyncResult *res, gpointer data) {
             GtkWidget *bar = g_object_get_data(G_OBJECT(row), "bar");
             double frac = (double)used / (double)total;
             gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(bar), frac);
-            char cls[16];
-            g_snprintf(cls, sizeof cls, "disk-%d", (int)(frac * 10 + 0.5));
-            gtk_widget_add_css_class(bar, cls);
+            /* under 10% free the bar turns red (CSS .low on the row) */
+            GtkWidget *rowbox = GTK_WIDGET(row);
+            if ((double)free / (double)total < 0.10) gtk_widget_add_css_class(rowbox, "low");
+            else gtk_widget_remove_css_class(rowbox, "low");
             gtk_widget_set_visible(bar, TRUE);
         }
     }
@@ -230,12 +326,19 @@ void sidebar_rebuild(App *a) {
     add_bookmarks(a, seen);
     g_autoptr(GFile) trash = g_file_new_for_uri("trash:///");
     add_place(a, G_TRASH, tr("Trash"), trash, FALSE);
+    GtkWidget *netrow = row_new(G_NET, tr("Network"), NULL);
+    g_object_set_data_full(G_OBJECT(netrow), "file", g_file_new_for_uri("network:///"), g_object_unref);
+    gtk_list_box_append(GTK_LIST_BOX(a->sidebar), netrow);
     add_pins(a);
 
     add_header(a, tr("Devices"));
     g_autoptr(GFile) root = g_file_new_for_path("/");
-    add_place(a, G_DISK, tr("System"), root, TRUE);
+    GtkWidget *sysrow = add_place(a, G_DISK, tr("System"), root, TRUE);
+    style_disk(a, sysrow, "System", TRUE);
 
+    /* phones (MTP / PTP) are shown as "Phone", "Phone 1", ... instead of the cryptic device name */
+    guint phones = 0;
+    g_autoptr(GHashTable) phone_uris = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     GList *mounts = g_volume_monitor_get_mounts(a->vm);
     for (GList *l = mounts; l; l = l->next) {
         GMount *m = l->data;
@@ -244,8 +347,16 @@ void sidebar_rebuild(App *a) {
         g_autofree char *p = g_file_get_path(mr);
         if (p && g_str_equal(p, "/")) continue;
         g_autofree char *name = g_mount_get_name(m);
+        g_autofree char *shown = NULL;
+        if (is_phone(mr)) {
+            g_autofree char *uri = g_file_get_uri(mr);
+            if (g_hash_table_contains(phone_uris, uri)) continue;
+            g_hash_table_add(phone_uris, g_steal_pointer(&uri));
+            shown = phone_name(phones++);
+        }
         gboolean removable = g_mount_can_eject(m) || (p && (g_str_has_prefix(p, "/run/media") || g_str_has_prefix(p, "/media")));
-        GtkWidget *row = add_place(a, !p ? G_NET : removable ? G_USB : G_DISK, name, mr, p != NULL);
+        GtkWidget *row = add_place(a, shown ? G_USB : !p ? G_NET : removable ? G_USB : G_DISK, shown ? shown : name, mr, p != NULL);
+        style_disk(a, row, name, FALSE);
         g_object_set_data_full(G_OBJECT(row), "mount", g_object_ref(m), g_object_unref);
     }
     g_list_free_full(mounts, g_object_unref);
@@ -256,7 +367,10 @@ void sidebar_rebuild(App *a) {
         g_autoptr(GMount) m = g_volume_get_mount(v);
         if (m || !g_volume_can_mount(v)) continue;
         g_autofree char *name = g_volume_get_name(v);
-        GtkWidget *row = row_new(G_DISK, name, tr("not mounted"));
+        g_autoptr(GFile) act = g_volume_get_activation_root(v);
+        g_autofree char *shown = act && is_phone(act) ? phone_name(phones++) : NULL;
+        GtkWidget *row = row_new(shown ? G_USB : G_DISK, shown ? shown : name, tr("not mounted"));
+        style_disk(a, row, name, FALSE);
         g_object_set_data_full(G_OBJECT(row), "volume", g_object_ref(v), g_object_unref);
         gtk_list_box_append(GTK_LIST_BOX(a->sidebar), row);
     }
@@ -314,7 +428,7 @@ static void open_row(App *a, GtkListBoxRow *row, gboolean new_tab) {
     } else if (f) {
         if (new_tab) open_in_new_tab(a, f);
         else navigate(a, f, TRUE, NULL);
-        gtk_widget_grab_focus(a->view);
+        view_focus(a);
     } else if (v) {
         MountReq *r = g_new0(MountReq, 1);
         r->a = a;

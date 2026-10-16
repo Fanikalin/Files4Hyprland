@@ -94,6 +94,11 @@ static void apply(App *a) {
     l.rounding = CLAMP(hypr_int("decoration:rounding", 8), 0, 24);
     l.border = CLAMP(hypr_int("general:border_size", 1), 1, 3);
     g_strlcpy(a->accent, l.accent, sizeof a->accent);
+    /* the theme's second color paints the system disk */
+    g_autofree char *second = dup_or(c, "color2", "green", l.accent);
+    gboolean changed2 = !g_str_equal(a->accent2, second) || !g_str_equal(a->red, l.red);
+    g_strlcpy(a->accent2, second, sizeof a->accent2);
+    g_strlcpy(a->red, l.red, sizeof a->red);
 
     int r = l.rounding, rs = MIN(r, 6);
     g_autofree char *css = g_strdup_printf(
@@ -154,28 +159,25 @@ static void apply(App *a) {
         "popover modelbutton { padding: 0 10px; margin: 0; min-height: 0; border-radius: %9$dpx; }\n"
         "popover modelbutton label { margin: 0; padding: 0; }\n"
         "popover contents box, popover contents stack { margin: 0; }\n"
+        "gridview.tiles { background: %1$s; padding: 6px; }\n"
+        "gridview.tiles > child { padding: 4px; border-radius: %9$dpx; }\n"
+        "gridview.tiles > child:hover { background: none; box-shadow: inset 0 0 0 1px alpha(%6$s, 0.35); }\n"
+        "gridview.tiles > child:selected { background: alpha(%6$s, 0.28); color: %4$s; }\n"
+        ".tile-prev { background: alpha(%5$s, 0.12); border-radius: %9$dpx; }\n"
+        ".tile-glyph { font-size: 42px; color: %5$s; }\n"
+        ".glyph-dir.tile-glyph, .tile-glyph.glyph-dir { color: %6$s; }\n"
+        ".tile-text { font-size: 7pt; color: %5$s; padding: 4px 6px; }\n"
         "columnview.rows-small row cell { padding: 0 8px; }\n"
         "columnview.rows-large row cell { padding: 7px 8px; }\n"
         "label.disk-info { margin-left: 26px; font-size: 90%%; }\n"
         "progressbar.disk { margin: 1px 0 2px 26px; }\n"
         "progressbar.disk trough { min-height: 4px; background: alpha(%5$s, 0.25); border-radius: 2px; }\n"
-        "progressbar.disk progress { min-height: 4px; border-radius: 2px; background: #4f8cff; }\n"
+        "progressbar.disk progress { min-height: 4px; border-radius: 2px; background: %6$s; }\n"
         "popover modelbutton:hover { background: alpha(%6$s, 0.3); }\n"
         "popover separator { background: alpha(%5$s, 0.4); margin: 2px 4px; }\n"
         "tooltip { background: %2$s; color: %4$s; border: 1px solid alpha(%6$s, 0.5); }\n",
         l.bg, l.surface, l.panel, l.fg, l.muted, l.accent, l.red, r, rs, l.border);
-    /* disk usage bar: blue when empty, the theme's red when full, in ten steps */
-    GdkRGBA blue, red;
-    gdk_rgba_parse(&blue, "#4f8cff");
-    if (!gdk_rgba_parse(&red, l.red)) gdk_rgba_parse(&red, "#e5484d");
     GString *extra = g_string_new(css);
-    for (int i = 0; i <= 10; i++) {
-        double t = i / 10.0;
-        g_string_append_printf(extra, "progressbar.disk-%d progress { background: rgb(%d,%d,%d); }\n", i,
-                               (int)((blue.red + (red.red - blue.red) * t) * 255 + 0.5),
-                               (int)((blue.green + (red.green - blue.green) * t) * 255 + 0.5),
-                               (int)((blue.blue + (red.blue - blue.blue) * t) * 255 + 0.5));
-    }
     gtk_css_provider_load_from_string(a->css, extra->str);
     g_string_free(extra, TRUE);
 
@@ -189,6 +191,8 @@ static void apply(App *a) {
     if (g_file_get_contents(icons_path, &icons, NULL, NULL) && *g_strstrip(icons))
         g_object_set(gs, "gtk-icon-theme-name", icons, NULL);
     a->theme_sig = theme_signature();
+    if (a->sidebar && changed2) sidebar_rebuild(a);
+    sidebar_style(a);
 
     g_free(l.bg); g_free(l.surface); g_free(l.panel); g_free(l.fg);
     g_free(l.muted); g_free(l.accent); g_free(l.red); g_free(l.green);

@@ -55,6 +55,11 @@ void popup_menu(App *a, GMenuModel *model, GtkWidget *rel, double x, double y) {
 static gboolean status_cb(gpointer data) {
     App *a = data;
     a->status_idle = 0;
+    if (cur_tab(a) && is_network(cur_tab(a)->dir)) {
+        g_autofree char *t = g_strdup_printf("%s  ·  %u", tr("Network"), network_count());
+        gtk_label_set_text(GTK_LABEL(a->status), t);
+        return G_SOURCE_REMOVE;
+    }
     GListModel *m = G_LIST_MODEL(a->sorted);
     guint n = g_list_model_get_n_items(m), dirs = 0;
     for (guint i = 0; i < n; i++) {
@@ -138,6 +143,7 @@ static char *dir_label(GFile *f) {
     g_autofree char *loc = dir_display_name(f);
     if (loc) return g_steal_pointer(&loc);
     if (g_file_has_uri_scheme(f, "trash")) return g_strdup(tr("Trash"));
+    if (is_network(f)) return g_strdup(tr("Network"));
     g_autofree char *base = g_file_get_basename(f);
     return g_strdup(base ? base : "/");
 }
@@ -245,9 +251,10 @@ static void on_addr_activate(GtkEntry *e, gpointer data) {
     if (exp[0] == '/' || strstr(exp, "://")) f = g_file_parse_name(exp);
     else f = g_file_resolve_relative_path(cur_tab(a)->dir, exp);
     show_address(a, FALSE);
-    gtk_widget_grab_focus(a->view);
+    view_focus(a);
     GFileType t = g_file_query_file_type(f, 0, NULL);
-    if (t == G_FILE_TYPE_DIRECTORY || !g_file_is_native(f)) navigate(a, f, TRUE, NULL);
+    if (!g_file_is_native(f)) net_open(a, f);
+    else if (t == G_FILE_TYPE_DIRECTORY) navigate(a, f, TRUE, NULL);
     else if (t != G_FILE_TYPE_UNKNOWN) {
         g_autoptr(GFile) parent = g_file_get_parent(f);
         g_autofree char *name = g_file_get_basename(f);
@@ -259,7 +266,7 @@ static gboolean on_addr_key(GtkEventControllerKey *k, guint kv, guint c, GdkModi
     (void)k; (void)c; (void)st;
     if (kv != GDK_KEY_Escape) return FALSE;
     show_address(data, FALSE);
-    gtk_widget_grab_focus(((App *)data)->view);
+    view_focus(data);
     return TRUE;
 }
 
@@ -302,16 +309,26 @@ void navigate(App *a, GFile *dir, gboolean push, const char *select) {
     }
     g_set_object(&t->dir, dir);
     g_object_unref(dir);
-    if (a->renaming) gtk_widget_grab_focus(a->view);
+    if (a->renaming) view_focus(a);
     gtk_editable_set_text(GTK_EDITABLE(a->search), "");
     g_free(a->pending_select);
     a->pending_select = g_strdup(select);
     a->pending_rename = FALSE;
     a->focus_first = TRUE;
-    GFile *old = gtk_directory_list_get_file(a->dirlist);
-    if (!old || !g_file_equal(old, t->dir)) gtk_directory_list_set_file(a->dirlist, t->dir);
-    else if (a->pending_select) view_try_pending(a);
-    else if (!gtk_directory_list_is_loading(a->dirlist)) view_focus_first(a);
+    if (is_network(t->dir)) {
+        gtk_stack_set_visible_child_name(GTK_STACK(a->pages), "network");
+        a->focus_first = FALSE;
+        if (!g_object_get_data(G_OBJECT(a->net_page), "scanned")) {
+            g_object_set_data(G_OBJECT(a->net_page), "scanned", GINT_TO_POINTER(1));
+            network_scan(a);
+        }
+    } else {
+        gtk_stack_set_visible_child_name(GTK_STACK(a->pages), "files");
+        GFile *old = gtk_directory_list_get_file(a->dirlist);
+        if (!old || !g_file_equal(old, t->dir)) gtk_directory_list_set_file(a->dirlist, t->dir);
+        else if (a->pending_select) view_try_pending(a);
+        else if (!gtk_directory_list_is_loading(a->dirlist)) view_focus_first(a);
+    }
     refresh_chrome(a);
 }
 
@@ -565,6 +582,8 @@ static void act(GSimpleAction *action, GVariant *param, gpointer data) {
         g_autoptr(GFile) p = g_file_get_parent(t->dir);
         g_autofree char *name = g_file_get_basename(t->dir);
         if (p) navigate(a, p, TRUE, name);
+    } else if (g_str_equal(n, "refresh") && is_network(t->dir)) {
+        network_scan(a);
     } else if (g_str_equal(n, "refresh")) {
         g_autoptr(GFile) d = g_object_ref(t->dir);
         gtk_directory_list_set_file(a->dirlist, NULL);
@@ -731,12 +750,12 @@ static void on_search_changed(GtkSearchEntry *e, gpointer data) {
 
 static void on_search_stop(GtkSearchEntry *e, gpointer data) {
     gtk_editable_set_text(GTK_EDITABLE(e), "");
-    gtk_widget_grab_focus(((App *)data)->view);
+    view_focus(data);
 }
 
 static void on_search_activate(GtkSearchEntry *e, gpointer data) {
     (void)e;
-    gtk_widget_grab_focus(((App *)data)->view);
+    view_focus(data);
 }
 
 static void on_mouse_nav(GtkGestureClick *g, int n, double x, double y, gpointer data) {
@@ -888,7 +907,12 @@ void window_build(App *a, GFile *start) {
     gtk_widget_add_css_class(a->toast_label, "toast");
     gtk_revealer_set_child(GTK_REVEALER(a->toast_rev), a->toast_label);
     gtk_overlay_add_overlay(GTK_OVERLAY(overlay), a->toast_rev);
-    gtk_box_append(GTK_BOX(a->main_panel), overlay);
+    a->pages = gtk_stack_new();
+    gtk_widget_set_vexpand(a->pages, TRUE);
+    a->net_page = network_new(a);
+    gtk_stack_add_named(GTK_STACK(a->pages), overlay, "files");
+    gtk_stack_add_named(GTK_STACK(a->pages), a->net_page, "network");
+    gtk_box_append(GTK_BOX(a->main_panel), a->pages);
     gtk_box_append(GTK_BOX(body), a->main_panel);
     gtk_box_append(GTK_BOX(root), body);
 
@@ -908,5 +932,5 @@ void window_build(App *a, GFile *start) {
     g_signal_connect_swapped(win, "notify::is-active", G_CALLBACK(theme_check), a);
     undo_update(a);
     navigate(a, start, FALSE, NULL);
-    gtk_widget_grab_focus(a->view);
+    view_focus(a);
 }

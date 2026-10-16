@@ -253,6 +253,8 @@ static const struct {
     {"Trash", {"Корзина", "Смітник", "Papierkorb", "Corbeille", "Papelera"}},
     {"System", {"Система", "Система", "System", "Système", "Sistema"}},
     {"Places", {"Места", "Місця", "Orte", "Emplacements", "Lugares"}},
+    {"Network", {"Сеть", "Мережа", "Netzwerk", "Réseau", "Red"}},
+    {"Phone", {"Телефон", "Телефон", "Telefon", "Téléphone", "Teléfono"}},
     {"Pinned", {"Закреплённые", "Закріплені", "Angeheftet", "Épinglés", "Fijados"}},
     {"Devices", {"Устройства", "Пристрої", "Geräte", "Périphériques", "Dispositivos"}},
     {"not mounted", {"не подключён", "не змонтовано", "nicht eingebunden", "non monté", "no montado"}},
@@ -331,7 +333,7 @@ void settings_load(App *a) {
     g_autoptr(GKeyFile) kf = g_key_file_new();
     if (!g_key_file_load_from_file(kf, p, G_KEY_FILE_NONE, NULL)) return;
     g_autofree char *sz = g_key_file_get_string(kf, "view", "rows", NULL);
-    if (sz && (g_str_equal(sz, "small") || g_str_equal(sz, "large"))) g_strlcpy(a->row_size, sz, sizeof a->row_size);
+    if (sz && (g_str_equal(sz, "small") || g_str_equal(sz, "large") || g_str_equal(sz, "tiles") || g_str_equal(sz, "tiles-large"))) g_strlcpy(a->row_size, sz, sizeof a->row_size);
     int col = g_key_file_get_integer(kf, "view", "sort", NULL);
     if (col >= SORT_NAME && col <= SORT_MTIME) a->sort_col = col;
     a->sort_desc = g_key_file_get_boolean(kf, "view", "descending", NULL);
