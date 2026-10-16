@@ -44,14 +44,14 @@ keep it up to date. One-time setup: trust the release key, add the repository, i
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Fanikalin/Files4Hyprland/main/data/release-key.asc | sudo pacman-key --add -
-sudo pacman-key --lsign-key 7BCE8A6E07649D86609D94C859DDBAF65426F382
+sudo pacman-key --lsign-key DABFB081F06B48B502AB5BAE004D0E8617C2774B
 printf '\n[files4hyprland]\nServer = https://github.com/Fanikalin/Files4Hyprland/releases/download/repo\n' | sudo tee -a /etc/pacman.conf
 sudo pacman -Sy files4hyprland
 ```
 
-Packages are signed with the release key (fingerprint `7BCE 8A6E 0764 9D86 609D  94C8 59DD BAF6 5426 F382`),
+Packages are signed with the release key (fingerprint `DABF B081 F06B 48B5 02AB  5BAE 004D 0E86 17C2 774B`),
 and pacman refuses anything that isn't. To stop using the repository, delete the `[files4hyprland]`
-section from `/etc/pacman.conf` and run `sudo pacman-key --delete 7BCE8A6E07649D86609D94C859DDBAF65426F382`.
+section from `/etc/pacman.conf` and run `sudo pacman-key --delete DABFB081F06B48B502AB5BAE004D0E8617C2774B`.
 
 Without the repository you can still install a single release by hand (no automatic updates):
 download `files4hyprland-*.pkg.tar.zst` from the [latest release](https://github.com/Fanikalin/Files4Hyprland/releases/latest)

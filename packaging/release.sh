@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 REPO=Fanikalin/Files4Hyprland
 GNUPGHOME_RELEASE="$HOME/.local/share/files4hyprland-release/gnupg"
-KEY=7BCE8A6E07649D86609D94C859DDBAF65426F382
+KEY=DABFB081F06B48B502AB5BAE004D0E8617C2774B
 ver=$(sed -n 's/^pkgver=//p' PKGBUILD)
 
 git -C .. tag -f "v$ver" >/dev/null
