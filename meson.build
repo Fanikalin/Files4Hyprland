@@ -1,5 +1,5 @@
 project('files4hyprland', 'c',
-  version: '2.3.0',
+  version: '2.3.1',
   license: 'MIT',
   meson_version: '>= 1.0',
   default_options: ['c_std=gnu11', 'warning_level=2', 'buildtype=release', 'b_lto=true'])
