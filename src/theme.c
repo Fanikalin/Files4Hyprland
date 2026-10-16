@@ -148,14 +148,36 @@ static void apply(App *a) {
         ".toast.error { border-color: %7$s; }\n"
         "scrollbar { background: none; border: none; }\n"
         "scrollbar slider { background: alpha(%6$s, 0.5); min-width: 4px; min-height: 4px; border-radius: 2px; }\n"
+        "popover { font-family: monospace; }\n"
         "popover > contents { background: %2$s; color: %4$s; border: 1px solid %6$s; border-radius: %9$dpx;"
         "  padding: 2px; }\n"
-        "popover modelbutton { padding: 3px 10px; border-radius: %9$dpx; }\n"
+        "popover modelbutton { padding: 0 10px; margin: 0; min-height: 0; border-radius: %9$dpx; }\n"
+        "popover modelbutton label { margin: 0; padding: 0; }\n"
+        "popover contents box, popover contents stack { margin: 0; }\n"
+        "columnview.rows-small row cell { padding: 0 8px; }\n"
+        "columnview.rows-large row cell { padding: 7px 8px; }\n"
+        "label.disk-info { margin-left: 26px; font-size: 90%%; }\n"
+        "progressbar.disk { margin: 1px 0 2px 26px; }\n"
+        "progressbar.disk trough { min-height: 4px; background: alpha(%5$s, 0.25); border-radius: 2px; }\n"
+        "progressbar.disk progress { min-height: 4px; border-radius: 2px; background: #4f8cff; }\n"
         "popover modelbutton:hover { background: alpha(%6$s, 0.3); }\n"
         "popover separator { background: alpha(%5$s, 0.4); margin: 2px 4px; }\n"
         "tooltip { background: %2$s; color: %4$s; border: 1px solid alpha(%6$s, 0.5); }\n",
         l.bg, l.surface, l.panel, l.fg, l.muted, l.accent, l.red, r, rs, l.border);
-    gtk_css_provider_load_from_string(a->css, css);
+    /* disk usage bar: blue when empty, the theme's red when full, in ten steps */
+    GdkRGBA blue, red;
+    gdk_rgba_parse(&blue, "#4f8cff");
+    if (!gdk_rgba_parse(&red, l.red)) gdk_rgba_parse(&red, "#e5484d");
+    GString *extra = g_string_new(css);
+    for (int i = 0; i <= 10; i++) {
+        double t = i / 10.0;
+        g_string_append_printf(extra, "progressbar.disk-%d progress { background: rgb(%d,%d,%d); }\n", i,
+                               (int)((blue.red + (red.red - blue.red) * t) * 255 + 0.5),
+                               (int)((blue.green + (red.green - blue.green) * t) * 255 + 0.5),
+                               (int)((blue.blue + (red.blue - blue.blue) * t) * 255 + 0.5));
+    }
+    gtk_css_provider_load_from_string(a->css, extra->str);
+    g_string_free(extra, TRUE);
 
     /* GTK internals (dialogs, selection handles, icons) follow the theme too */
     const char *mode = g_hash_table_lookup(c, "mode");

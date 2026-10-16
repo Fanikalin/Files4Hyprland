@@ -74,9 +74,43 @@ static void on_header_sort(GtkSorter *s, GtkSorterChange ch, gpointer data) {
     a->sort_col = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(col), "sortcol"));
     a->sort_desc = gtk_column_view_sorter_get_primary_sort_order(GTK_COLUMN_VIEW_SORTER(s)) == GTK_SORT_DESCENDING;
     gtk_sorter_changed(GTK_SORTER(a->sorter), GTK_SORTER_CHANGE_DIFFERENT);
+    view_sync_sort_actions(a);
+    settings_save(a);
+}
+
+static GtkColumnViewColumn *sort_column(App *a, SortCol c) {
+    return c == SORT_SIZE ? a->col_size : c == SORT_MTIME ? a->col_mod : a->col_name;
+}
+
+void view_set_sort(App *a, SortCol col, gboolean desc) {
+    gtk_column_view_sort_by_column(GTK_COLUMN_VIEW(a->view), sort_column(a, col),
+                                   desc ? GTK_SORT_DESCENDING : GTK_SORT_ASCENDING);
+}
+
+static void set_state(App *a, const char *name, const char *val) {
+    GAction *act = g_action_map_lookup_action(G_ACTION_MAP(a->win), name);
+    if (act) g_simple_action_set_state(G_SIMPLE_ACTION(act), g_variant_new_string(val));
+}
+
+void view_sync_sort_actions(App *a) {
+    set_state(a, "sort-by", a->sort_col == SORT_SIZE ? "size" : a->sort_col == SORT_MTIME ? "time" : "name");
+    set_state(a, "sort-order", a->sort_desc ? "desc" : "asc");
+    set_state(a, "view-size", a->row_size);
+}
+
+void view_set_row_size(App *a, const char *size) {
+    g_strlcpy(a->row_size, size, sizeof a->row_size);
+    gtk_widget_remove_css_class(a->view, "rows-small");
+    gtk_widget_remove_css_class(a->view, "rows-large");
+    if (g_str_equal(size, "small")) gtk_widget_add_css_class(a->view, "rows-small");
+    else if (g_str_equal(size, "large")) gtk_widget_add_css_class(a->view, "rows-large");
+    view_sync_sort_actions(a);
+    settings_save(a);
 }
 
 /* ---------------------------------------------------------------- selection helpers */
+static void grab_view_focus(App *a);
+
 GList *view_targets(App *a) {
     GList *out = NULL;
     g_autoptr(GtkBitset) set = gtk_selection_model_get_selection(GTK_SELECTION_MODEL(a->sel));
@@ -120,8 +154,32 @@ void view_select_name(App *a, const char *name, gboolean rename) {
         return;
     }
     g_clear_pointer(&a->pending_select, g_free);
+    a->focus_first = FALSE;
+    grab_view_focus(a);
     gtk_column_view_scroll_to(GTK_COLUMN_VIEW(a->view), pos, NULL, GTK_LIST_SCROLL_FOCUS | GTK_LIST_SCROLL_SELECT, NULL);
     if (rename) g_timeout_add(60, rename_idle, a);
+}
+
+/* Keep the keyboard on the file list: put focus there unless the user is typing in the path or search box. */
+static void grab_view_focus(App *a) {
+    GtkWidget *f = gtk_window_get_focus(a->win);
+    if (f && (f == a->addr || f == a->search || gtk_widget_is_ancestor(f, a->addr) || gtk_widget_is_ancestor(f, a->search) ||
+              (a->savename && (f == a->savename || gtk_widget_is_ancestor(f, a->savename)))))
+        return;
+    gtk_widget_grab_focus(a->view);
+}
+
+void view_focus_first(App *a) {
+    a->focus_first = FALSE;
+    if (a->renaming || a->pending_select) return;
+    grab_view_focus(a);
+    if (g_list_model_get_n_items(G_LIST_MODEL(a->sorted)) == 0) return;
+    g_autoptr(GtkBitset) set = gtk_selection_model_get_selection(GTK_SELECTION_MODEL(a->sel));
+    if (!gtk_bitset_is_empty(set)) {
+        gtk_column_view_scroll_to(GTK_COLUMN_VIEW(a->view), gtk_bitset_get_minimum(set), NULL, GTK_LIST_SCROLL_FOCUS, NULL);
+        return;
+    }
+    gtk_column_view_scroll_to(GTK_COLUMN_VIEW(a->view), 0, NULL, GTK_LIST_SCROLL_FOCUS | GTK_LIST_SCROLL_SELECT, NULL);
 }
 
 void view_try_pending(App *a) {
@@ -212,34 +270,91 @@ static void on_entry_leave(GtkEventControllerFocus *f, gpointer data) {
 }
 
 /* ---------------------------------------------------------------- context menu */
-static GMenuModel *item_menu, *empty_menu;
+static GMenuItem *radio(const char *label, const char *action, const char *target) {
+    GMenuItem *it = g_menu_item_new(label, NULL);
+    g_menu_item_set_action_and_target(it, action, "s", target);
+    return it;
+}
 
-static GMenuModel *build_menu(gboolean item) {
+static void append_radio(GMenu *m, const char *label, const char *action, const char *target) {
+    GMenuItem *it = radio(label, action, target);
+    g_menu_append_item(m, it);
+    g_object_unref(it);
+}
+
+static void add_section(GMenu *m, GMenu *sec) {
+    if (g_menu_model_get_n_items(G_MENU_MODEL(sec))) g_menu_append_section(m, NULL, G_MENU_MODEL(sec));
+    g_object_unref(sec);
+}
+
+static gboolean all_pinned(GList *targets) {
+    for (GList *l = targets; l; l = l->next)
+        if (!sidebar_is_pinned(l->data)) return FALSE;
+    return targets != NULL;
+}
+
+/* Built on every right-click: it depends on what is selected and on what other programs offer. */
+static GMenuModel *build_item_menu(App *a, GList *targets) {
     GMenu *m = g_menu_new();
     GMenu *s1 = g_menu_new(), *s2 = g_menu_new(), *s3 = g_menu_new();
-    if (item) {
-        g_menu_append(s1, "Open", "win.open");
-        g_menu_append(s1, "Open in new tab", "win.open-tab");
-        g_menu_append(s2, "Cut", "win.cut");
-        g_menu_append(s2, "Copy", "win.copy");
-        g_menu_append(s2, "Paste", "win.paste");
-        g_menu_append(s3, "Rename", "win.rename");
-        g_menu_append(s3, "Copy path", "win.copy-path");
-        g_menu_append(s3, "Move to Trash", "win.trash");
-    } else {
-        g_menu_append(s1, "Paste", "win.paste");
-        g_menu_append(s1, "Undo", "win.undo");
-        g_menu_append(s1, "Redo", "win.redo");
-        g_menu_append(s2, "New folder", "win.new-folder");
-        g_menu_append(s2, "New file", "win.new-file");
-        g_menu_append(s3, "Open terminal here", "win.terminal");
-        g_menu_append(s3, "Show hidden files", "win.toggle-hidden");
-        g_menu_append(s3, "Refresh", "win.refresh");
+    g_menu_append(s1, "Open", "win.open");
+    g_menu_append(s1, "Open in new tab", "win.open-tab");
+    if (targets && !targets->next) {
+        g_autofree char *name = g_file_get_basename(targets->data);
+        if (name && g_str_has_suffix(name, ".sh")) g_menu_append(s1, "Open as program", "win.run-script");
     }
-    g_menu_append_section(m, NULL, G_MENU_MODEL(s1));
-    g_menu_append_section(m, NULL, G_MENU_MODEL(s2));
-    g_menu_append_section(m, NULL, G_MENU_MODEL(s3));
-    g_object_unref(s1); g_object_unref(s2); g_object_unref(s3);
+    g_menu_append(s2, "Cut", "win.cut");
+    g_menu_append(s2, "Copy", "win.copy");
+    g_menu_append(s2, "Paste", "win.paste");
+    g_menu_append(s3, "Rename", "win.rename");
+    g_menu_append(s3, "Copy path", "win.copy-path");
+    if (all_pinned(targets)) g_menu_append(s3, "Unpin from sidebar", "win.unpin");
+    else g_menu_append(s3, "Pin to sidebar", "win.pin");
+    g_menu_append(s3, "Move to Trash", "win.trash");
+    add_section(m, s1);
+    add_section(m, s2);
+    add_section(m, s3);
+    GMenuModel *ext = ext_menu_build(a, targets);
+    if (ext) {
+        g_menu_append_section(m, NULL, ext);
+        g_object_unref(ext);
+    }
+    return G_MENU_MODEL(m);
+}
+
+static GMenuModel *build_empty_menu(App *a) {
+    GMenu *m = g_menu_new();
+    GMenu *s0 = g_menu_new(), *s1 = g_menu_new(), *s2 = g_menu_new(), *s3 = g_menu_new();
+    GMenu *view = g_menu_new(), *sort = g_menu_new();
+    append_radio(view, "Large rows", "win.view-size", "large");
+    append_radio(view, "Medium rows", "win.view-size", "medium");
+    append_radio(view, "Small rows", "win.view-size", "small");
+    g_menu_append_submenu(s0, "View", G_MENU_MODEL(view));
+    append_radio(sort, "Name", "win.sort-by", "name");
+    append_radio(sort, "Size", "win.sort-by", "size");
+    append_radio(sort, "Date modified", "win.sort-by", "time");
+    GMenu *order = g_menu_new();
+    append_radio(order, "Ascending", "win.sort-order", "asc");
+    append_radio(order, "Descending", "win.sort-order", "desc");
+    g_menu_append_section(sort, NULL, G_MENU_MODEL(order));
+    g_menu_append_submenu(s0, "Sort by", G_MENU_MODEL(sort));
+    g_menu_append(s1, "Paste", "win.paste");
+    g_menu_append(s1, "Undo", "win.undo");
+    g_menu_append(s1, "Redo", "win.redo");
+    g_menu_append(s2, "New folder", "win.new-folder");
+    g_menu_append(s2, "New file", "win.new-file");
+    Tab *t = cur_tab(a);
+    g_menu_append(s2, t && sidebar_is_pinned(t->dir) ? "Unpin this folder" : "Pin this folder", t && sidebar_is_pinned(t->dir) ? "win.unpin" : "win.pin");
+    g_menu_append(s3, "Open terminal here", "win.terminal");
+    g_menu_append(s3, "Show hidden files", "win.toggle-hidden");
+    g_menu_append(s3, "Refresh", "win.refresh");
+    add_section(m, s0);
+    add_section(m, s1);
+    add_section(m, s2);
+    add_section(m, s3);
+    g_object_unref(view);
+    g_object_unref(sort);
+    g_object_unref(order);
     return G_MENU_MODEL(m);
 }
 
@@ -252,7 +367,10 @@ static void on_cell_click(GtkGestureClick *g, int n, double x, double y, gpointe
     gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
     guint pos = gtk_list_item_get_position(li);
     if (!gtk_list_item_get_selected(li)) gtk_selection_model_select_item(GTK_SELECTION_MODEL(a->sel), pos, TRUE);
-    popup_menu(a, item_menu, cell, x, y);
+    GList *targets = view_targets(a);
+    g_autoptr(GMenuModel) menu = build_item_menu(a, targets);
+    g_list_free_full(targets, g_object_unref);
+    popup_menu(a, menu, cell, x, y);
 }
 
 static void on_empty_click(GtkGestureClick *g, int n, double x, double y, gpointer data) {
@@ -260,7 +378,8 @@ static void on_empty_click(GtkGestureClick *g, int n, double x, double y, gpoint
     App *a = data;
     GtkWidget *w = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(g));
     gtk_selection_model_unselect_all(GTK_SELECTION_MODEL(a->sel));
-    popup_menu(a, empty_menu, w, x, y);
+    g_autoptr(GMenuModel) menu = build_empty_menu(a);
+    popup_menu(a, menu, w, x, y);
 }
 
 /* ---------------------------------------------------------------- cells */
@@ -328,11 +447,13 @@ static void name_bind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer dat
     else gtk_widget_remove_css_class(g, "glyph-dir");
     GtkWidget *label = g_object_get_data(G_OBJECT(box), "label");
     const char *rel = g_file_info_get_attribute_string(info, "f4h::rel");
+    g_autofree char *shown = info_is_dir(info) ? dir_display_name(info_file(info)) : NULL;
+    const char *dname = shown ? shown : g_file_info_get_display_name(info);
     if (rel && *rel) {
-        g_autofree char *m = g_markup_printf_escaped("%s  <span alpha=\"50%%\">%s</span>", g_file_info_get_display_name(info), rel);
+        g_autofree char *m = g_markup_printf_escaped("%s  <span alpha=\"50%%\">%s</span>", dname, rel);
         gtk_label_set_markup(GTK_LABEL(label), m);
     } else {
-        gtk_label_set_text(GTK_LABEL(label), g_file_info_get_display_name(info));
+        gtk_label_set_text(GTK_LABEL(label), dname);
     }
     gtk_stack_set_visible_child_name(GTK_STACK(g_object_get_data(G_OBJECT(box), "stack")), "label");
     g_object_set_data(G_OBJECT(info), "cell", box);
@@ -471,22 +592,21 @@ static void on_loading(GObject *o, GParamSpec *ps, gpointer data) {
     (void)ps;
     if (!gtk_directory_list_is_loading(GTK_DIRECTORY_LIST(o))) {
         view_try_pending(data);
+        if (((App *)data)->focus_first) view_focus_first(data);
         queue_status(data);
     }
 }
 
 GtkWidget *view_new(App *a) {
-    item_menu = build_menu(TRUE);
-    empty_menu = build_menu(FALSE);
-
-    a->dirlist = gtk_directory_list_new(F4H_ATTRS, NULL);
+    settings_load(a);
+    a->dirlist = gtk_directory_list_new(F4H_ATTRS, NULL); /* ours; search swaps it out of the filter model */
     gtk_directory_list_set_monitored(a->dirlist, TRUE);
     gtk_directory_list_set_io_priority(a->dirlist, G_PRIORITY_DEFAULT_IDLE);
     g_signal_connect(a->dirlist, "notify::error", G_CALLBACK(on_dir_error), a);
     g_signal_connect(a->dirlist, "notify::loading", G_CALLBACK(on_loading), a);
 
     a->filter = gtk_custom_filter_new(filter_func, a, NULL);
-    a->filtered = gtk_filter_list_model_new(G_LIST_MODEL(a->dirlist), GTK_FILTER(a->filter));
+    a->filtered = gtk_filter_list_model_new(g_object_ref(G_LIST_MODEL(a->dirlist)), GTK_FILTER(a->filter));
     a->sorter = gtk_custom_sorter_new(sort_func, a, NULL);
     a->sorted = gtk_sort_list_model_new(G_LIST_MODEL(a->filtered), GTK_SORTER(a->sorter));
     a->sel = gtk_multi_selection_new(G_LIST_MODEL(a->sorted));
@@ -502,13 +622,18 @@ GtkWidget *view_new(App *a) {
 
     GtkColumnViewColumn *name = add_column(a, "Name", G_CALLBACK(name_setup), G_CALLBACK(name_bind),
                                            G_CALLBACK(name_unbind), SORT_NAME, FALSE);
+    a->col_name = name;
     gtk_column_view_column_set_expand(name, TRUE);
     GtkColumnViewColumn *size = add_column(a, "Size", G_CALLBACK(text_setup), G_CALLBACK(size_bind), NULL, SORT_SIZE, TRUE);
+    a->col_size = size;
     gtk_column_view_column_set_fixed_width(size, 100);
     GtkColumnViewColumn *mod = add_column(a, "Modified", G_CALLBACK(text_setup), G_CALLBACK(mtime_bind), NULL, SORT_MTIME, FALSE);
+    a->col_mod = mod;
     gtk_column_view_column_set_fixed_width(mod, 170);
-    gtk_column_view_sort_by_column(GTK_COLUMN_VIEW(a->view), name, GTK_SORT_ASCENDING);
+    gtk_column_view_sort_by_column(GTK_COLUMN_VIEW(a->view), sort_column(a, a->sort_col),
+                                   a->sort_desc ? GTK_SORT_DESCENDING : GTK_SORT_ASCENDING);
     g_signal_connect(gtk_column_view_get_sorter(GTK_COLUMN_VIEW(a->view)), "changed", G_CALLBACK(on_header_sort), a);
+    view_set_row_size(a, a->row_size);
 
     GtkEventController *k = gtk_event_controller_key_new();
     g_signal_connect(k, "key-pressed", G_CALLBACK(on_view_key), a);

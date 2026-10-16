@@ -52,18 +52,6 @@ void popup_menu(App *a, GMenuModel *model, GtkWidget *rel, double x, double y) {
 }
 
 /* ---------------------------------------------------------------- status */
-static void fs_cb(GObject *src, GAsyncResult *res, gpointer data) {
-    App *a = data;
-    g_autoptr(GFileInfo) fi = g_file_query_filesystem_info_finish(G_FILE(src), res, NULL);
-    g_clear_pointer(&a->fs_info, g_free);
-    if (fi && g_file_info_has_attribute(fi, G_FILE_ATTRIBUTE_FILESYSTEM_FREE)) {
-        g_autofree char *fr = human_size(g_file_info_get_attribute_uint64(fi, G_FILE_ATTRIBUTE_FILESYSTEM_FREE));
-        g_autofree char *tot = human_size(g_file_info_get_attribute_uint64(fi, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE));
-        a->fs_info = g_strdup_printf("%s free of %s", fr, tot);
-    }
-    queue_status(a);
-}
-
 static gboolean status_cb(gpointer data) {
     App *a = data;
     a->status_idle = 0;
@@ -89,7 +77,6 @@ static gboolean status_cb(gpointer data) {
         g_string_append_printf(s, "  ·  %u selected (%s)", nsel, h);
     }
     if (a->clip) g_string_append_printf(s, "  ·  %u %s", g_list_length(a->clip), a->clip_cut ? "cut" : "copied");
-    if (a->fs_info) g_string_append_printf(s, "  ·  %s", a->fs_info);
     gtk_label_set_text(GTK_LABEL(a->status), s->str);
     g_string_free(s, TRUE);
 
@@ -148,8 +135,9 @@ static GFile *tab_dest(App *a, GtkWidget *w) {
 
 static char *dir_label(GFile *f) {
     g_autofree char *path = g_file_get_path(f);
-    if (path && g_str_equal(path, g_get_home_dir())) return g_strdup("Home");
-    if (g_file_has_uri_scheme(f, "trash")) return g_strdup("Trash");
+    g_autofree char *loc = dir_display_name(f);
+    if (loc) return g_steal_pointer(&loc);
+    if (g_file_has_uri_scheme(f, "trash")) return g_strdup(tr("Trash"));
     g_autofree char *base = g_file_get_basename(f);
     return g_strdup(base ? base : "/");
 }
@@ -218,6 +206,8 @@ static void render_crumbs(App *a) {
         const char *label = base;
         g_autofree char *alt = NULL;
         if (i == 0 && !g_file_is_native(f)) label = alt = dir_label(f);
+        else if (i && !(alt = dir_display_name(f))) alt = NULL;
+        if (alt) label = alt;
         if (i) {
             GtkWidget *sep = gtk_label_new("›");
             gtk_widget_add_css_class(sep, "sep");
@@ -317,11 +307,11 @@ void navigate(App *a, GFile *dir, gboolean push, const char *select) {
     g_free(a->pending_select);
     a->pending_select = g_strdup(select);
     a->pending_rename = FALSE;
+    a->focus_first = TRUE;
     GFile *old = gtk_directory_list_get_file(a->dirlist);
     if (!old || !g_file_equal(old, t->dir)) gtk_directory_list_set_file(a->dirlist, t->dir);
-    else view_try_pending(a);
-    g_clear_pointer(&a->fs_info, g_free);
-    g_file_query_filesystem_info_async(t->dir, "filesystem::free,filesystem::size", G_PRIORITY_LOW, NULL, fs_cb, a);
+    else if (a->pending_select) view_try_pending(a);
+    else if (!gtk_directory_list_is_loading(a->dirlist)) view_focus_first(a);
     refresh_chrome(a);
 }
 
@@ -643,6 +633,20 @@ static void act(GSimpleAction *action, GVariant *param, gpointer data) {
             toast(a, "%s", err->message);
     } else if (g_str_equal(n, "undo") || g_str_equal(n, "redo")) {
         undo_run(a, g_str_equal(n, "redo"));
+    } else if (g_str_equal(n, "pin") || g_str_equal(n, "unpin")) {
+        gboolean pin = g_str_equal(n, "pin");
+        GList *sel = view_targets(a);
+        if (!sel) sel = g_list_prepend(NULL, g_object_ref(t->dir));
+        for (GList *l = sel; l; l = l->next) {
+            if (pin) sidebar_pin(a, l->data);
+            else sidebar_unpin(a, l->data);
+        }
+        toast(a, pin ? "Pinned to sidebar" : "Unpinned");
+        g_list_free_full(sel, g_object_unref);
+    } else if (g_str_equal(n, "run-script")) {
+        GList *sel = view_targets(a);
+        if (sel) run_script(a, sel->data);
+        g_list_free_full(sel, g_object_unref);
     } else if (g_str_equal(n, "choose")) {
         choose(a);
     } else if (g_str_equal(n, "cancel-pick") || g_str_equal(n, "quit")) {
@@ -653,9 +657,36 @@ static void act(GSimpleAction *action, GVariant *param, gpointer data) {
 static const char *ACTIONS[] = {"back", "forward", "up", "refresh", "new-tab", "close-tab", "next-tab", "prev-tab",
                                 "address", "search", "toggle-hidden", "open", "open-tab", "cut", "copy", "paste",
                                 "copy-path", "rename", "trash", "new-folder", "new-file", "terminal", "undo", "redo", "choose",
-                                "cancel-pick", "quit"};
+                                "cancel-pick", "quit", "pin", "unpin", "run-script"};
+
+static void on_ext_run(GSimpleAction *act, GVariant *p, gpointer data) {
+    (void)act;
+    ext_run(data, g_variant_get_uint32(p));
+}
+
+/* radio items of the View / Sort by submenus: the action state is the checked entry */
+static void on_state_action(GSimpleAction *act, GVariant *p, gpointer data) {
+    App *a = data;
+    const char *n = g_action_get_name(G_ACTION(act));
+    const char *v = g_variant_get_string(p, NULL);
+    if (g_str_equal(n, "view-size")) view_set_row_size(a, v);
+    else if (g_str_equal(n, "sort-by"))
+        view_set_sort(a, g_str_equal(v, "size") ? SORT_SIZE : g_str_equal(v, "time") ? SORT_MTIME : SORT_NAME, a->sort_desc);
+    else if (g_str_equal(n, "sort-order")) view_set_sort(a, a->sort_col, g_str_equal(v, "desc"));
+}
 
 static void setup_actions(App *a) {
+    GSimpleAction *er = g_simple_action_new("ext-run", G_VARIANT_TYPE_UINT32);
+    g_signal_connect(er, "activate", G_CALLBACK(on_ext_run), a);
+    g_action_map_add_action(G_ACTION_MAP(a->win), G_ACTION(er));
+    g_object_unref(er);
+    const char *radios[] = {"view-size", "sort-by", "sort-order"};
+    for (guint i = 0; i < G_N_ELEMENTS(radios); i++) {
+        GSimpleAction *s = g_simple_action_new_stateful(radios[i], G_VARIANT_TYPE_STRING, g_variant_new_string(""));
+        g_signal_connect(s, "activate", G_CALLBACK(on_state_action), a);
+        g_action_map_add_action(G_ACTION_MAP(a->win), G_ACTION(s));
+        g_object_unref(s);
+    }
     for (guint i = 0; i < G_N_ELEMENTS(ACTIONS); i++) {
         GSimpleAction *s = g_simple_action_new(ACTIONS[i], NULL);
         g_signal_connect(s, "activate", G_CALLBACK(act), a);

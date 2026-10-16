@@ -18,6 +18,13 @@ It keeps the btop-like look of panels with outlines, and follows your desktop:
 - Location bar: back / forward / up / refresh, clickable path, editable path (`Ctrl+L`)
 - Search covers subfolders: results stream in from a background thread, each with its subfolder shown
   dimmed (`files4hyprland --search TEXT [PATH]` opens with a search)
+- Disks in the sidebar show used / total and a usage bar from blue to red; right-click a file or folder
+  and choose **Pin to sidebar** to keep it in the list (**Unpin** removes it)
+- Right-click menus: compact, with **Open with**, **Open as program** for `.sh` scripts, entries added by
+  other programs (KDE service menus in `kio/servicemenus`), and on empty space **View** (row size)
+  and **Sort by** submenus; the choice is remembered in `~/.config/files4hyprland/settings.ini`
+- Default folders (Downloads, Documents, ...) and sidebar sections are shown in the system language
+  (ru, uk, de, fr, es)
 - Click to select, double-click to open, `Ctrl`/`Shift`+click for several; right-click menus
 - **System drag and drop**: drag files out to any app (browser, chat, editor, other file managers)
   and drop files in from any app. Drop on a folder, a sidebar place or disk, a tab or a path segment.

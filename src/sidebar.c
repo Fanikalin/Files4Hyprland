@@ -1,6 +1,7 @@
 /* Sidebar: Places (XDG dirs, GTK bookmarks, Trash) and Devices (GIO volume
  * monitor: mounts, unmounted volumes, mount/unmount/eject). */
 #include "app.h"
+#include <glib/gstdio.h>
 #include <string.h>
 
 #define G_HOME ""
@@ -17,6 +18,7 @@
 #define G_NET ""
 
 static GtkListBoxRow *menu_row;
+static void add_pins(App *a);
 static guint rebuild_idle;
 
 static GtkWidget *row_new(const char *glyph, const char *name, const char *extra) {
@@ -28,14 +30,24 @@ static GtkWidget *row_new(const char *glyph, const char *name, const char *extra
     gtk_label_set_xalign(GTK_LABEL(l), 0);
     gtk_box_append(GTK_BOX(box), g);
     gtk_box_append(GTK_BOX(box), l);
+    /* "used / total" or the state, on its own line under the name */
     GtkWidget *x = gtk_label_new(extra ? extra : "");
     gtk_widget_add_css_class(x, "dim");
-    gtk_widget_set_hexpand(x, TRUE);
+    gtk_widget_add_css_class(x, "disk-info");
     gtk_label_set_xalign(GTK_LABEL(x), 0);
-    gtk_box_append(GTK_BOX(box), x);
+    gtk_widget_set_visible(x, extra != NULL);
+    GtkWidget *bar = gtk_progress_bar_new();
+    gtk_widget_add_css_class(bar, "disk");
+    gtk_widget_set_visible(bar, FALSE);
+    GtkWidget *col = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_hexpand(l, TRUE);
+    gtk_box_append(GTK_BOX(col), box);
+    gtk_box_append(GTK_BOX(col), x);
+    gtk_box_append(GTK_BOX(col), bar);
     GtkWidget *row = gtk_list_box_row_new();
-    gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), box);
+    gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), col);
     g_object_set_data(G_OBJECT(row), "extra", x);
+    g_object_set_data(G_OBJECT(row), "bar", bar);
     return row;
 }
 
@@ -50,14 +62,31 @@ static void add_header(App *a, const char *title) {
     gtk_list_box_append(GTK_LIST_BOX(a->sidebar), row);
 }
 
+/* "used / total" under the disk name and a bar from blue (empty) to red (full) */
 static void set_size_cb(GObject *src, GAsyncResult *res, gpointer data) {
-    GtkWidget *label = data;
+    GtkWidget *row = data;
     g_autoptr(GFileInfo) fi = g_file_query_filesystem_info_finish(G_FILE(src), res, NULL);
-    if (fi && g_file_info_has_attribute(fi, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE)) {
-        g_autofree char *s = human_size(g_file_info_get_attribute_uint64(fi, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE));
-        gtk_label_set_text(GTK_LABEL(label), s);
+    if (fi && g_file_info_has_attribute(fi, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE) &&
+        g_file_info_has_attribute(fi, G_FILE_ATTRIBUTE_FILESYSTEM_FREE)) {
+        guint64 total = g_file_info_get_attribute_uint64(fi, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE);
+        guint64 free = g_file_info_get_attribute_uint64(fi, G_FILE_ATTRIBUTE_FILESYSTEM_FREE);
+        guint64 used = total > free ? total - free : 0;
+        if (total) {
+            g_autofree char *u = human_size(used), *t = human_size(total);
+            g_autofree char *txt = g_strdup_printf("%s / %s", u, t);
+            GtkWidget *info = g_object_get_data(G_OBJECT(row), "extra");
+            gtk_label_set_text(GTK_LABEL(info), txt);
+            gtk_widget_set_visible(info, TRUE);
+            GtkWidget *bar = g_object_get_data(G_OBJECT(row), "bar");
+            double frac = (double)used / (double)total;
+            gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(bar), frac);
+            char cls[16];
+            g_snprintf(cls, sizeof cls, "disk-%d", (int)(frac * 10 + 0.5));
+            gtk_widget_add_css_class(bar, cls);
+            gtk_widget_set_visible(bar, TRUE);
+        }
     }
-    g_object_unref(label);
+    g_object_unref(row);
 }
 
 static GFile *row_dest(App *a, GtkWidget *w) {
@@ -72,8 +101,8 @@ static GtkWidget *add_place(App *a, const char *glyph, const char *name, GFile *
     gtk_list_box_append(GTK_LIST_BOX(a->sidebar), row);
     add_drop_target(a, row, row_dest);
     if (show_size)
-        g_file_query_filesystem_info_async(file, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE, G_PRIORITY_LOW, NULL, set_size_cb,
-                                           g_object_ref(g_object_get_data(G_OBJECT(row), "extra")));
+        g_file_query_filesystem_info_async(file, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE "," G_FILE_ATTRIBUTE_FILESYSTEM_FREE,
+                                           G_PRIORITY_LOW, NULL, set_size_cb, g_object_ref(row));
     return row;
 }
 
@@ -81,7 +110,8 @@ static void add_xdg(App *a, GHashTable *seen, GUserDirectory d, const char *glyp
     const char *p = g_get_user_special_dir(d);
     if (!p || g_str_equal(p, g_get_home_dir()) || !g_file_test(p, G_FILE_TEST_IS_DIR)) return;
     g_autoptr(GFile) f = g_file_new_for_path(p);
-    g_autofree char *name = g_path_get_basename(p);
+    g_autofree char *name = dir_display_name(f);
+    if (!name) name = g_path_get_basename(p);
     add_place(a, glyph, name, f, FALSE);
     g_hash_table_add(seen, g_strdup(p));
 }
@@ -104,14 +134,92 @@ static void add_bookmarks(App *a, GHashTable *seen) {
     }
 }
 
+
+/* ---------------------------------------------------------------- pinned files and folders */
+static GPtrArray *pins; /* URIs */
+
+static char *pins_path(void) { return g_build_filename(g_get_user_config_dir(), "files4hyprland", "pins", NULL); }
+
+static void pins_load(void) {
+    if (pins) return;
+    pins = g_ptr_array_new_with_free_func(g_free);
+    g_autofree char *txt = NULL;
+    g_autofree char *p = pins_path();
+    if (!g_file_get_contents(p, &txt, NULL, NULL)) return;
+    g_auto(GStrv) lines = g_strsplit(txt, "\n", -1);
+    for (char **l = lines; *l; l++)
+        if (**l) g_ptr_array_add(pins, g_strdup(*l));
+}
+
+static void pins_save(void) {
+    g_autofree char *p = pins_path();
+    g_autofree char *dir = g_path_get_dirname(p);
+    g_mkdir_with_parents(dir, 0755);
+    GString *s = g_string_new(NULL);
+    for (guint i = 0; i < pins->len; i++) g_string_append_printf(s, "%s\n", (char *)pins->pdata[i]);
+    g_file_set_contents(p, s->str, -1, NULL);
+    g_string_free(s, TRUE);
+}
+
+static int pin_index(GFile *f) {
+    pins_load();
+    g_autofree char *uri = g_file_get_uri(f);
+    for (guint i = 0; i < pins->len; i++)
+        if (g_str_equal(pins->pdata[i], uri)) return i;
+    return -1;
+}
+
+gboolean sidebar_is_pinned(GFile *f) { return pin_index(f) >= 0; }
+
+void sidebar_pin(App *a, GFile *f) {
+    if (pin_index(f) >= 0) return;
+    g_ptr_array_add(pins, g_file_get_uri(f));
+    pins_save();
+    sidebar_rebuild(a);
+}
+
+void sidebar_unpin(App *a, GFile *f) {
+    int i = pin_index(f);
+    if (i < 0) return;
+    g_ptr_array_remove_index(pins, i);
+    pins_save();
+    sidebar_rebuild(a);
+}
+
+static void add_pins(App *a) {
+    pins_load();
+    gboolean header = FALSE;
+    for (guint i = 0; i < pins->len; i++) {
+        g_autoptr(GFile) f = g_file_new_for_uri(pins->pdata[i]);
+        GFileType t = g_file_query_file_type(f, 0, NULL);
+        if (t == G_FILE_TYPE_UNKNOWN && g_file_is_native(f)) continue; /* gone; stays in the list for when it comes back */
+        if (!header) {
+            add_header(a, tr("Pinned"));
+            header = TRUE;
+        }
+        g_autofree char *name = dir_display_name(f);
+        if (!name) name = g_file_get_basename(f);
+        GtkWidget *row;
+        if (t == G_FILE_TYPE_DIRECTORY || !g_file_is_native(f)) {
+            row = add_place(a, G_MARK, name, f, FALSE);
+        } else {
+            row = row_new("", name, NULL);
+            g_object_set_data_full(G_OBJECT(row), "file", g_object_ref(f), g_object_unref);
+            g_object_set_data(G_OBJECT(row), "pinfile", GINT_TO_POINTER(1));
+            gtk_list_box_append(GTK_LIST_BOX(a->sidebar), row);
+        }
+        g_object_set_data(G_OBJECT(row), "pinned", GINT_TO_POINTER(1));
+    }
+}
+
 void sidebar_rebuild(App *a) {
     GtkWidget *child;
     while ((child = gtk_widget_get_first_child(a->sidebar))) gtk_list_box_remove(GTK_LIST_BOX(a->sidebar), child);
 
-    add_header(a, "Places");
+    add_header(a, tr("Places"));
     g_autoptr(GHashTable) seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     g_autoptr(GFile) home = g_file_new_for_path(g_get_home_dir());
-    add_place(a, G_HOME, "Home", home, FALSE);
+    add_place(a, G_HOME, tr("Home"), home, FALSE);
     g_hash_table_add(seen, g_strdup(g_get_home_dir()));
     add_xdg(a, seen, G_USER_DIRECTORY_DESKTOP, G_DESKTOP);
     add_xdg(a, seen, G_USER_DIRECTORY_DOCUMENTS, G_DOCS);
@@ -121,11 +229,12 @@ void sidebar_rebuild(App *a) {
     add_xdg(a, seen, G_USER_DIRECTORY_VIDEOS, G_VIDEO);
     add_bookmarks(a, seen);
     g_autoptr(GFile) trash = g_file_new_for_uri("trash:///");
-    add_place(a, G_TRASH, "Trash", trash, FALSE);
+    add_place(a, G_TRASH, tr("Trash"), trash, FALSE);
+    add_pins(a);
 
-    add_header(a, "Devices");
+    add_header(a, tr("Devices"));
     g_autoptr(GFile) root = g_file_new_for_path("/");
-    add_place(a, G_DISK, "System", root, TRUE);
+    add_place(a, G_DISK, tr("System"), root, TRUE);
 
     GList *mounts = g_volume_monitor_get_mounts(a->vm);
     for (GList *l = mounts; l; l = l->next) {
@@ -147,7 +256,7 @@ void sidebar_rebuild(App *a) {
         g_autoptr(GMount) m = g_volume_get_mount(v);
         if (m || !g_volume_can_mount(v)) continue;
         g_autofree char *name = g_volume_get_name(v);
-        GtkWidget *row = row_new(G_DISK, name, "not mounted");
+        GtkWidget *row = row_new(G_DISK, name, tr("not mounted"));
         g_object_set_data_full(G_OBJECT(row), "volume", g_object_ref(v), g_object_unref);
         gtk_list_box_append(GTK_LIST_BOX(a->sidebar), row);
     }
@@ -159,7 +268,7 @@ void sidebar_mark_current(App *a) {
     Tab *t = cur_tab(a);
     for (GtkWidget *r = gtk_widget_get_first_child(a->sidebar); r; r = gtk_widget_get_next_sibling(r)) {
         GFile *f = g_object_get_data(G_OBJECT(r), "file");
-        if (f && t && g_file_equal(f, t->dir)) gtk_widget_add_css_class(r, "current");
+        if (f && t && !g_object_get_data(G_OBJECT(r), "pinfile") && g_file_equal(f, t->dir)) gtk_widget_add_css_class(r, "current");
         else gtk_widget_remove_css_class(r, "current");
     }
 }
@@ -200,7 +309,9 @@ static void mounted_cb(GObject *src, GAsyncResult *res, gpointer data) {
 static void open_row(App *a, GtkListBoxRow *row, gboolean new_tab) {
     GFile *f = g_object_get_data(G_OBJECT(row), "file");
     GVolume *v = g_object_get_data(G_OBJECT(row), "volume");
-    if (f) {
+    if (f && g_object_get_data(G_OBJECT(row), "pinfile")) {
+        open_file(a, f);
+    } else if (f) {
         if (new_tab) open_in_new_tab(a, f);
         else navigate(a, f, TRUE, NULL);
         gtk_widget_grab_focus(a->view);
@@ -243,7 +354,10 @@ static void side_action(GSimpleAction *act, GVariant *p, gpointer data) {
     App *a = data;
     if (!menu_row) return;
     const char *name = g_action_get_name(G_ACTION(act));
-    if (g_str_equal(name, "side-open")) open_row(a, menu_row, FALSE);
+    if (g_str_equal(name, "side-unpin")) {
+        GFile *f = g_object_get_data(G_OBJECT(menu_row), "file");
+        if (f) sidebar_unpin(a, f);
+    } else if (g_str_equal(name, "side-open")) open_row(a, menu_row, FALSE);
     else if (g_str_equal(name, "side-open-tab")) open_row(a, menu_row, TRUE);
     else {
         GMount *m = g_object_get_data(G_OBJECT(menu_row), "mount");
@@ -275,7 +389,8 @@ static void on_click(GtkGestureClick *g, int n, double x, double y, gpointer dat
     menu_row = row;
     g_autoptr(GMenu) menu = g_menu_new();
     g_menu_append(menu, "Open", "win.side-open");
-    g_menu_append(menu, "Open in new tab", "win.side-open-tab");
+    if (!g_object_get_data(G_OBJECT(row), "pinfile")) g_menu_append(menu, "Open in new tab", "win.side-open-tab");
+    if (g_object_get_data(G_OBJECT(row), "pinned")) g_menu_append(menu, "Unpin", "win.side-unpin");
     GMount *m = g_object_get_data(G_OBJECT(row), "mount");
     if (m && g_mount_can_unmount(m)) g_menu_append(menu, "Unmount", "win.side-unmount");
     if (m && g_mount_can_eject(m)) g_menu_append(menu, "Eject", "win.side-eject");
@@ -297,6 +412,7 @@ GtkWidget *sidebar_new(App *a) {
     static const GActionEntry entries[] = {
         {"side-open", side_action, NULL, NULL, NULL, {0}},
         {"side-open-tab", side_action, NULL, NULL, NULL, {0}},
+        {"side-unpin", side_action, NULL, NULL, NULL, {0}},
         {"side-unmount", side_action, NULL, NULL, NULL, {0}},
         {"side-eject", side_action, NULL, NULL, NULL, {0}},
     };

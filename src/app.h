@@ -36,6 +36,7 @@ typedef struct {
     GtkWidget *side_panel, *main_panel, *main_title;
     GtkWidget *sidebar; /* GtkListBox */
     GtkWidget *view;    /* GtkColumnView */
+    GtkColumnViewColumn *col_name, *col_size, *col_mod;
     GtkWidget *status, *toast_rev, *toast_label;
     GtkWidget *item_menu, *empty_menu, *side_menu;
     GHashTable *buttons; /* action name -> GtkWidget* (sensitivity) */
@@ -57,13 +58,14 @@ typedef struct {
     GCancellable *search_cancel;
     guint search_timer;
     SortCol sort_col;
+    char row_size[16]; /* small | medium | large */
     gboolean sort_desc;
     GList *clip; /* GFile* */
     gboolean clip_cut;
     char *pending_select;
     gboolean pending_rename;
+    gboolean focus_first; /* after loading a folder: select its first row and focus the list */
     GFileInfo *renaming;
-    char *fs_info;
     guint status_idle;
     char *side_target; /* sidebar row id under the context menu */
     GQueue undo, redo; /* Op* */
@@ -100,6 +102,11 @@ void open_file(App *a, GFile *file);
 GFileInfo *info_at(App *a, guint pos);
 GFile *info_file(GFileInfo *info);
 gboolean info_is_dir(GFileInfo *info);
+const char *tr(const char *english);   /* UI words of the sidebar, translated to the system language */
+char *dir_display_name(GFile *f);      /* translated name of Home / Downloads / ... or NULL */
+void run_script(App *a, GFile *file);
+void settings_load(App *a);
+void settings_save(App *a);
 
 /* dnd.c */
 typedef GFile *(*DropDestFn)(App *a, GtkWidget *w);
@@ -110,6 +117,13 @@ void add_drag_source(App *a, GtkWidget *cell);
 GtkWidget *sidebar_new(App *a);
 void sidebar_rebuild(App *a);
 void sidebar_mark_current(App *a);
+gboolean sidebar_is_pinned(GFile *f);
+void sidebar_pin(App *a, GFile *f);
+void sidebar_unpin(App *a, GFile *f);
+
+/* ext.c: entries other programs add to the context menu */
+GMenuModel *ext_menu_build(App *a, GList *targets); /* NULL when there is nothing to add */
+void ext_run(App *a, guint index);
 
 /* undo.c */
 Op *op_new(OpKind kind, gboolean is_dir);
@@ -129,6 +143,10 @@ GFileInfo *view_focused(App *a, guint *pos);
 void view_select_name(App *a, const char *name, gboolean rename);
 void view_begin_rename(App *a);
 void view_try_pending(App *a);
+void view_focus_first(App *a);
+void view_sync_sort_actions(App *a);
+void view_set_row_size(App *a, const char *size);
+void view_set_sort(App *a, SortCol col, gboolean desc);
 
 /* window.c */
 void window_build(App *a, GFile *start);

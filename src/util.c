@@ -1,5 +1,6 @@
 /* Helpers: sizes, unique names, toasts, opening files and background file jobs. */
 #include "app.h"
+#include <glib/gstdio.h>
 #include <string.h>
 
 char *human_size(guint64 n) {
@@ -241,3 +242,108 @@ void transfer_files(App *a, GList *files, GFile *dest, gboolean copy) {
 }
 
 void trash_files(App *a, GList *files) { run_job(a, JOB_TRASH, files, NULL); }
+
+/* ---------------------------------------------------------------- system language */
+/* Only the words the app shows for default folders and sidebar sections are
+ * translated; columns: ru uk de fr es. */
+static const struct {
+    const char *en, *t[5];
+} L10N[] = {
+    {"Home", {"Домашняя папка", "Домашня тека", "Persönlicher Ordner", "Dossier personnel", "Carpeta personal"}},
+    {"Trash", {"Корзина", "Смітник", "Papierkorb", "Corbeille", "Papelera"}},
+    {"System", {"Система", "Система", "System", "Système", "Sistema"}},
+    {"Places", {"Места", "Місця", "Orte", "Emplacements", "Lugares"}},
+    {"Pinned", {"Закреплённые", "Закріплені", "Angeheftet", "Épinglés", "Fijados"}},
+    {"Devices", {"Устройства", "Пристрої", "Geräte", "Périphériques", "Dispositivos"}},
+    {"not mounted", {"не подключён", "не змонтовано", "nicht eingebunden", "non monté", "no montado"}},
+    {"Desktop", {"Рабочий стол", "Робочий стіл", "Schreibtisch", "Bureau", "Escritorio"}},
+    {"Documents", {"Документы", "Документи", "Dokumente", "Documents", "Documentos"}},
+    {"Downloads", {"Загрузки", "Завантаження", "Downloads", "Téléchargements", "Descargas"}},
+    {"Music", {"Музыка", "Музика", "Musik", "Musique", "Música"}},
+    {"Pictures", {"Изображения", "Зображення", "Bilder", "Images", "Imágenes"}},
+    {"Public", {"Общедоступные", "Загальнодоступні", "Öffentlich", "Public", "Público"}},
+    {"Templates", {"Шаблоны", "Шаблони", "Vorlagen", "Modèles", "Plantillas"}},
+    {"Videos", {"Видео", "Відео", "Videos", "Vidéos", "Vídeos"}},
+};
+
+static int lang_index(void) {
+    static int idx = -2;
+    if (idx != -2) return idx;
+    static const char *langs[] = {"ru", "uk", "de", "fr", "es"};
+    idx = -1;
+    for (const char *const *n = g_get_language_names(); *n && idx < 0; n++)
+        for (guint i = 0; i < G_N_ELEMENTS(langs); i++)
+            if (g_str_has_prefix(*n, langs[i]) && ((*n)[2] == '\0' || (*n)[2] == '_' || (*n)[2] == '.' || (*n)[2] == '@')) idx = i;
+    return idx;
+}
+
+const char *tr(const char *english) {
+    int l = lang_index();
+    if (l < 0) return english;
+    for (guint i = 0; i < G_N_ELEMENTS(L10N); i++)
+        if (g_str_equal(L10N[i].en, english)) return L10N[i].t[l];
+    return english;
+}
+
+/* Default folders keep English names on disk (xdg-user-dirs made them before the
+ * language was chosen); show them in the system language. User-renamed folders stay as they are. */
+char *dir_display_name(GFile *f) {
+    if (lang_index() < 0) return NULL;
+    g_autofree char *path = g_file_get_path(f);
+    if (!path) return NULL;
+    if (g_str_equal(path, g_get_home_dir())) return g_strdup(tr("Home"));
+    static const struct { GUserDirectory d; const char *en; } dirs[] = {
+        {G_USER_DIRECTORY_DESKTOP, "Desktop"}, {G_USER_DIRECTORY_DOCUMENTS, "Documents"},
+        {G_USER_DIRECTORY_DOWNLOAD, "Downloads"}, {G_USER_DIRECTORY_MUSIC, "Music"},
+        {G_USER_DIRECTORY_PICTURES, "Pictures"}, {G_USER_DIRECTORY_PUBLIC_SHARE, "Public"},
+        {G_USER_DIRECTORY_TEMPLATES, "Templates"}, {G_USER_DIRECTORY_VIDEOS, "Videos"},
+    };
+    g_autofree char *base = g_path_get_basename(path);
+    for (guint i = 0; i < G_N_ELEMENTS(dirs); i++) {
+        const char *p = g_get_user_special_dir(dirs[i].d);
+        if (p && g_str_equal(p, path) && g_str_equal(base, dirs[i].en)) return g_strdup(tr(dirs[i].en));
+    }
+    return NULL;
+}
+
+/* ---------------------------------------------------------------- scripts */
+/* "Open as program": run a shell script in a terminal that stays open afterwards. */
+void run_script(App *a, GFile *file) {
+    g_autofree char *path = g_file_get_path(file);
+    g_autoptr(GFile) parent = g_file_get_parent(file);
+    g_autofree char *dir = parent ? g_file_get_path(parent) : NULL;
+    if (!path) return;
+    const char *argv[] = {"xdg-terminal-exec", "bash", "-c",
+                          "if [ -x \"$1\" ]; then \"$1\"; else bash \"$1\"; fi; s=$?; "
+                          "printf '\\n[exit status %s] press Enter to close ' \"$s\"; read -r _",
+                          "f4h-script", path, NULL};
+    g_autoptr(GError) err = NULL;
+    if (!g_spawn_async(dir, (char **)argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err)) toast_error(a, err->message);
+}
+
+/* ---------------------------------------------------------------- settings */
+static char *settings_path(void) { return g_build_filename(g_get_user_config_dir(), "files4hyprland", "settings.ini", NULL); }
+
+void settings_load(App *a) {
+    g_strlcpy(a->row_size, "medium", sizeof a->row_size);
+    a->sort_col = SORT_NAME;
+    g_autofree char *p = settings_path();
+    g_autoptr(GKeyFile) kf = g_key_file_new();
+    if (!g_key_file_load_from_file(kf, p, G_KEY_FILE_NONE, NULL)) return;
+    g_autofree char *sz = g_key_file_get_string(kf, "view", "rows", NULL);
+    if (sz && (g_str_equal(sz, "small") || g_str_equal(sz, "large"))) g_strlcpy(a->row_size, sz, sizeof a->row_size);
+    int col = g_key_file_get_integer(kf, "view", "sort", NULL);
+    if (col >= SORT_NAME && col <= SORT_MTIME) a->sort_col = col;
+    a->sort_desc = g_key_file_get_boolean(kf, "view", "descending", NULL);
+}
+
+void settings_save(App *a) {
+    g_autofree char *p = settings_path();
+    g_autofree char *dir = g_path_get_dirname(p);
+    g_mkdir_with_parents(dir, 0755);
+    g_autoptr(GKeyFile) kf = g_key_file_new();
+    g_key_file_set_string(kf, "view", "rows", a->row_size);
+    g_key_file_set_integer(kf, "view", "sort", a->sort_col);
+    g_key_file_set_boolean(kf, "view", "descending", a->sort_desc);
+    g_key_file_save_to_file(kf, p, NULL);
+}
