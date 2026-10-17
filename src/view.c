@@ -98,8 +98,7 @@ void view_sync_sort_actions(App *a) {
     set_state(a, "view-size", a->row_size);
 }
 
-void view_set_row_size(App *a, const char *size) {
-    g_strlcpy(a->row_size, size, sizeof a->row_size);
+static void apply_row_size(App *a, const char *size) {
     gboolean tiles = g_str_has_prefix(size, "tiles");
     gboolean changed = tiles != a->tiles;
     a->tiles = tiles;
@@ -110,14 +109,28 @@ void view_set_row_size(App *a, const char *size) {
     gtk_stack_set_visible_child_name(GTK_STACK(a->view_stack), tiles ? "tiles" : "details");
     if (tiles) gtk_grid_view_set_min_columns(GTK_GRID_VIEW(a->grid), 1);
     view_sync_sort_actions(a);
-    settings_save(a);
     if (tiles) {
-        /* rebuild the tiles at the new size */
         GtkSelectionModel *m = GTK_SELECTION_MODEL(a->sel);
         gtk_grid_view_set_model(GTK_GRID_VIEW(a->grid), NULL);
         gtk_grid_view_set_model(GTK_GRID_VIEW(a->grid), m);
     }
     if (changed && gtk_widget_get_mapped(a->view_stack)) view_focus(a);
+}
+
+void view_apply_size(App *a, const char *size) {
+    g_strlcpy(a->row_size, size, sizeof a->row_size);
+    apply_row_size(a, size);
+}
+
+void view_set_row_size(App *a, const char *size) {
+    g_strlcpy(a->row_size, size, sizeof a->row_size);
+    apply_row_size(a, size);
+    Tab *t = cur_tab(a);
+    if (t && a->dir_views) {
+        g_autofree char *uri = g_file_get_uri(t->dir);
+        g_hash_table_replace(a->dir_views, g_strdup(uri), g_strdup(size));
+    }
+    settings_save(a);
 }
 
 /* ---------------------------------------------------------------- selection helpers */
@@ -321,6 +334,10 @@ static GMenuModel *build_item_menu(App *a, GList *targets) {
     if (targets && !targets->next) {
         g_autofree char *name = g_file_get_basename(targets->data);
         if (name && g_str_has_suffix(name, ".sh")) g_menu_append(s1, "Open as program", "win.run-script");
+        if (name && name_is_archive(name)) {
+            g_menu_append(s1, "Extract here", "win.extract-here");
+            g_menu_append(s1, "Extract into folder", "win.extract-into");
+        }
     }
     g_menu_append(s2, "Cut", "win.cut");
     g_menu_append(s2, "Copy", "win.copy");
@@ -391,12 +408,17 @@ static void on_cell_click(GtkGestureClick *g, int n, double x, double y, gpointe
     GtkListItem *li = g_object_get_data(G_OBJECT(cell), "li");
     if (!li || !gtk_list_item_get_item(li)) return;
     gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
-    guint pos = gtk_list_item_get_position(li);
-    if (!gtk_list_item_get_selected(li)) gtk_selection_model_select_item(GTK_SELECTION_MODEL(a->sel), pos, TRUE);
-    GList *targets = view_targets(a);
-    g_autoptr(GMenuModel) menu = build_item_menu(a, targets);
-    g_list_free_full(targets, g_object_unref);
-    popup_menu(a, menu, cell, x, y);
+    if (gtk_list_item_get_selected(li)) {
+        /* item is selected → show item context menu */
+        GList *targets = view_targets(a);
+        g_autoptr(GMenuModel) menu = build_item_menu(a, targets);
+        g_list_free_full(targets, g_object_unref);
+        popup_menu(a, menu, cell, x, y);
+    } else {
+        /* item is not selected → show folder/background menu without selecting item */
+        g_autoptr(GMenuModel) menu = build_empty_menu(a);
+        popup_menu(a, menu, cell, x, y);
+    }
 }
 
 static void on_empty_click(GtkGestureClick *g, int n, double x, double y, gpointer data) {
@@ -546,6 +568,24 @@ static GtkColumnViewColumn *add_column(App *a, const char *title, GCallback setu
     return c;
 }
 
+/* ---------------------------------------------------------------- deferred thumbnail loading */
+typedef struct {
+    GtkWidget *box;
+    GFileInfo *info;
+    int req;
+} ThumbReq;
+
+static gboolean do_deferred_thumb(gpointer data) {
+    ThumbReq *r = data;
+    GtkListItem *li = g_object_get_data(G_OBJECT(r->box), "li");
+    if (li && gtk_list_item_get_item(li) == (gpointer)r->info)
+        thumb_load(r->box, r->info, r->req);
+    g_object_unref(r->box);
+    g_object_unref(r->info);
+    g_free(r);
+    return G_SOURCE_REMOVE;
+}
+
 /* ---------------------------------------------------------------- tiles */
 static void tile_metrics(App *a, int *pw, int *ph, int *chars, int *req) {
     gboolean big = g_str_equal(a->row_size, "tiles-large");
@@ -627,7 +667,11 @@ static void tile_bind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer dat
     gtk_stack_set_visible_child_name(GTK_STACK(g_object_get_data(G_OBJECT(box), "stack")), "label");
     gtk_stack_set_visible_child_name(GTK_STACK(prev), "glyph");
     g_object_set_data(G_OBJECT(info), "cell", box);
-    thumb_load(box, info, req);
+    ThumbReq *tr = g_new(ThumbReq, 1);
+    tr->box = g_object_ref(box);
+    tr->info = g_object_ref(info);
+    tr->req = req;
+    g_idle_add_full(G_PRIORITY_LOW, do_deferred_thumb, tr, NULL);
 }
 
 static void tile_unbind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer data) {
@@ -788,6 +832,6 @@ GtkWidget *view_new(App *a) {
         gtk_widget_add_controller(sw, GTK_EVENT_CONTROLLER(g));
         gtk_stack_add_named(GTK_STACK(a->view_stack), sw, names[i]);
     }
-    view_set_row_size(a, a->row_size);
+    apply_row_size(a, a->row_size);
     return a->view_stack;
 }

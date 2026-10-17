@@ -29,7 +29,8 @@ typedef struct {
     GtkWindow *win;
 
     /* chrome */
-    GtkWidget *tabbar;
+    GtkWidget *tabbar;     /* inner GtkBox with tab buttons */
+    GtkWidget *tabbar_sw;  /* GtkScrolledWindow wrapping tabbar */
     GtkWidget *btn_back, *btn_fwd, *btn_up;
     GtkWidget *loc_stack, *crumbs_sw, *crumbs, *addr, *search;
     GtkWidget *actions, *savename;
@@ -58,6 +59,7 @@ typedef struct {
     GPtrArray *tabs; /* Tab* */
     guint cur;
     gboolean show_hidden;
+    GHashTable *dir_views; /* URI -> row_size string, per-directory view override */
     char *query; /* casefolded search text, or NULL */
     GListStore *results;     /* recursive search results (GFileInfo) */
     GCancellable *search_cancel;
@@ -112,6 +114,8 @@ char *dir_display_name(GFile *f);      /* translated name of Home / Downloads / 
 void run_script(App *a, GFile *file);
 void settings_load(App *a);
 void settings_save(App *a);
+gboolean name_is_archive(const char *filename); /* check by extension */
+void extract_archive(App *a, GFile *archive, gboolean into_folder);
 
 /* dnd.c */
 typedef GFile *(*DropDestFn)(App *a, GtkWidget *w);
@@ -162,7 +166,8 @@ void view_try_pending(App *a);
 void view_focus_first(App *a);
 void view_sync_sort_actions(App *a);
 void view_focus(App *a);
-void view_set_row_size(App *a, const char *size);
+void view_set_row_size(App *a, const char *size); /* user action: apply + save for current dir + update default */
+void view_apply_size(App *a, const char *size);   /* programmatic: apply without saving */
 void view_set_sort(App *a, SortCol col, gboolean desc);
 
 /* window.c */

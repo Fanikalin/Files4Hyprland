@@ -323,20 +323,173 @@ void run_script(App *a, GFile *file) {
     if (!g_spawn_async(dir, (char **)argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &err)) toast_error(a, err->message);
 }
 
+/* ---------------------------------------------------------------- archive extraction */
+static gboolean tool_avail(const char *name) {
+    g_autofree char *p = g_find_program_in_path(name);
+    return p != NULL;
+}
+
+gboolean name_is_archive(const char *name) {
+    if (!name) return FALSE;
+    static const char *exts[] = {
+        ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tar.lz",
+        ".tar.lzma", ".tar.Z", ".tar.lz4",
+        ".zip", ".tar", ".tgz", ".tbz", ".tbz2", ".txz", ".tzst",
+        ".gz", ".bz2", ".xz", ".zst", ".lz", ".lzma",
+        ".rar", ".7z", ".Z", NULL
+    };
+    for (const char **e = exts; *e; e++)
+        if (g_str_has_suffix(name, *e)) return TRUE;
+    return FALSE;
+}
+
+static char *archive_stem(const char *name) {
+    static const char *double_exts[] = {
+        ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tar.lz",
+        ".tar.lzma", ".tar.Z", ".tar.lz4", NULL
+    };
+    for (int i = 0; double_exts[i]; i++) {
+        if (g_str_has_suffix(name, double_exts[i]))
+            return g_strndup(name, strlen(name) - strlen(double_exts[i]));
+    }
+    const char *dot = strrchr(name, '.');
+    if (dot && dot != name) return g_strndup(name, dot - name);
+    return g_strdup(name);
+}
+
+typedef struct {
+    App *a;
+    GFile *archive;
+    GFile *dest;
+    gboolean into_folder;
+    gboolean ok;
+    char *folder_name; /* stem, set when into_folder */
+} ExtractJob;
+
+static void extract_free(ExtractJob *j) {
+    g_object_unref(j->archive);
+    g_object_unref(j->dest);
+    g_free(j->folder_name);
+    g_free(j);
+}
+
+static gboolean run_extract(const char *path, const char *dest) {
+    int st = -1;
+    if (tool_avail("unar")) {
+        const char *argv[] = {"unar", "-D", "-force-overwrite", "-o", dest, path, NULL};
+        g_spawn_sync(NULL, (char **)argv, NULL,
+                     G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                     NULL, NULL, NULL, NULL, &st, NULL);
+        if (st == 0) return TRUE;
+    }
+    if (tool_avail("7z")) {
+        g_autofree char *oarg = g_strdup_printf("-o%s", dest);
+        const char *argv[] = {"7z", "x", "-y", path, oarg, NULL};
+        g_spawn_sync(NULL, (char **)argv, NULL,
+                     G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                     NULL, NULL, NULL, NULL, &st, NULL);
+        if (st == 0) return TRUE;
+    }
+    if (tool_avail("tar")) {
+        const char *argv[] = {"tar", "-xf", path, "-C", dest, NULL};
+        g_spawn_sync(NULL, (char **)argv, NULL,
+                     G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                     NULL, NULL, NULL, NULL, &st, NULL);
+        if (st == 0) return TRUE;
+    }
+    if (tool_avail("unzip")) {
+        const char *argv[] = {"unzip", "-o", path, "-d", dest, NULL};
+        g_spawn_sync(NULL, (char **)argv, NULL,
+                     G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                     NULL, NULL, NULL, NULL, &st, NULL);
+        if (st == 0) return TRUE;
+    }
+    return FALSE;
+}
+
+static void extract_thread(GTask *task, gpointer src, gpointer data, GCancellable *c) {
+    (void)src; (void)c;
+    ExtractJob *j = data;
+    g_autofree char *path = g_file_get_path(j->archive);
+    g_autofree char *dest = g_file_get_path(j->dest);
+    if (!path || !dest) {
+        g_task_return_boolean(task, FALSE);
+        return;
+    }
+    g_autoptr(GError) err = NULL;
+    g_file_make_directory_with_parents(j->dest, NULL, &err);
+    if (err && err->code != G_IO_ERROR_EXISTS) {
+        g_task_return_boolean(task, FALSE);
+        return;
+    }
+    j->ok = run_extract(path, dest);
+    g_task_return_boolean(task, TRUE);
+}
+
+static void extract_done(GObject *src, GAsyncResult *res, gpointer data) {
+    (void)src;
+    ExtractJob *j = data;
+    gboolean completed = g_task_propagate_boolean(G_TASK(res), NULL);
+    if (!completed || !j->ok) {
+        toast(j->a, j->ok ? "Extraction failed" : "No extraction tool found — install unar, 7z or tar");
+    } else {
+        toast(j->a, "Extracted successfully");
+        if (j->folder_name) view_select_name(j->a, j->folder_name, FALSE);
+    }
+    extract_free(j);
+}
+
+void extract_archive(App *a, GFile *archive, gboolean into_folder) {
+    Tab *t = cur_tab(a);
+    if (!t) return;
+    ExtractJob *j = g_new0(ExtractJob, 1);
+    j->a = a;
+    j->archive = g_object_ref(archive);
+    j->into_folder = into_folder;
+    if (into_folder) {
+        g_autofree char *name = g_file_get_basename(archive);
+        g_autofree char *stem = archive_stem(name);
+        j->folder_name = g_strdup(stem);
+        g_autoptr(GFile) parent = g_file_get_parent(archive);
+        j->dest = g_file_get_child(parent ? parent : t->dir, stem);
+    } else {
+        g_autoptr(GFile) parent = g_file_get_parent(archive);
+        j->dest = g_object_ref(parent ? parent : t->dir);
+    }
+    g_autoptr(GTask) task = g_task_new(NULL, NULL, extract_done, j);
+    g_task_set_task_data(task, j, NULL);
+    g_task_run_in_thread(task, extract_thread);
+}
+
 /* ---------------------------------------------------------------- settings */
 static char *settings_path(void) { return g_build_filename(g_get_user_config_dir(), "files4hyprland", "settings.ini", NULL); }
+
+static gboolean valid_row_size(const char *s) {
+    return s && (g_str_equal(s, "small") || g_str_equal(s, "medium") || g_str_equal(s, "large") ||
+                 g_str_equal(s, "tiles") || g_str_equal(s, "tiles-large"));
+}
 
 void settings_load(App *a) {
     g_strlcpy(a->row_size, "medium", sizeof a->row_size);
     a->sort_col = SORT_NAME;
+    if (!a->dir_views)
+        a->dir_views = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
     g_autofree char *p = settings_path();
     g_autoptr(GKeyFile) kf = g_key_file_new();
     if (!g_key_file_load_from_file(kf, p, G_KEY_FILE_NONE, NULL)) return;
     g_autofree char *sz = g_key_file_get_string(kf, "view", "rows", NULL);
-    if (sz && (g_str_equal(sz, "small") || g_str_equal(sz, "large") || g_str_equal(sz, "tiles") || g_str_equal(sz, "tiles-large"))) g_strlcpy(a->row_size, sz, sizeof a->row_size);
+    if (valid_row_size(sz)) g_strlcpy(a->row_size, sz, sizeof a->row_size);
     int col = g_key_file_get_integer(kf, "view", "sort", NULL);
     if (col >= SORT_NAME && col <= SORT_MTIME) a->sort_col = col;
     a->sort_desc = g_key_file_get_boolean(kf, "view", "descending", NULL);
+    g_auto(GStrv) keys = g_key_file_get_keys(kf, "dirs", NULL, NULL);
+    if (keys) {
+        for (char **k = keys; *k; k++) {
+            char *v = g_key_file_get_string(kf, "dirs", *k, NULL);
+            if (valid_row_size(v)) g_hash_table_replace(a->dir_views, g_strdup(*k), v);
+            else g_free(v);
+        }
+    }
 }
 
 void settings_save(App *a) {
@@ -347,5 +500,12 @@ void settings_save(App *a) {
     g_key_file_set_string(kf, "view", "rows", a->row_size);
     g_key_file_set_integer(kf, "view", "sort", a->sort_col);
     g_key_file_set_boolean(kf, "view", "descending", a->sort_desc);
+    if (a->dir_views) {
+        GHashTableIter it;
+        gpointer k, v;
+        g_hash_table_iter_init(&it, a->dir_views);
+        while (g_hash_table_iter_next(&it, &k, &v))
+            g_key_file_set_string(kf, "dirs", k, v);
+    }
     g_key_file_save_to_file(kf, p, NULL);
 }

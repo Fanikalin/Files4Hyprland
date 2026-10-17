@@ -148,6 +148,23 @@ static char *dir_label(GFile *f) {
     return g_strdup(base ? base : "/");
 }
 
+static gboolean scroll_to_cur_tab(gpointer data) {
+    App *a = data;
+    if (!a->tabbar_sw) return G_SOURCE_REMOVE;
+    GtkWidget *tab = gtk_widget_get_first_child(a->tabbar);
+    for (guint i = 0; i < a->cur && tab; i++) tab = gtk_widget_get_next_sibling(tab);
+    if (!tab || !gtk_widget_get_realized(tab)) return G_SOURCE_REMOVE;
+    graphene_rect_t bounds;
+    if (!gtk_widget_compute_bounds(tab, a->tabbar, &bounds)) return G_SOURCE_REMOVE;
+    GtkAdjustment *adj = gtk_scrolled_window_get_hadjustment(GTK_SCROLLED_WINDOW(a->tabbar_sw));
+    double page = gtk_adjustment_get_page_size(adj);
+    double val  = gtk_adjustment_get_value(adj);
+    double x = bounds.origin.x, w = bounds.size.width;
+    if (x < val) gtk_adjustment_set_value(adj, x);
+    else if (x + w > val + page) gtk_adjustment_set_value(adj, x + w - page);
+    return G_SOURCE_REMOVE;
+}
+
 static void render_tabs(App *a) {
     GtkWidget *c;
     while ((c = gtk_widget_get_first_child(a->tabbar))) gtk_box_remove(GTK_BOX(a->tabbar), c);
@@ -174,11 +191,7 @@ static void render_tabs(App *a) {
         add_drop_target(a, box, tab_dest);
         gtk_box_append(GTK_BOX(a->tabbar), box);
     }
-    GtkWidget *plus = gtk_button_new_with_label("+");
-    gtk_widget_add_css_class(plus, "glyph");
-    gtk_widget_set_tooltip_text(plus, "New tab (Ctrl+T)");
-    gtk_actionable_set_action_name(GTK_ACTIONABLE(plus), "win.new-tab");
-    gtk_box_append(GTK_BOX(a->tabbar), plus);
+    g_idle_add(scroll_to_cur_tab, a);
 }
 
 /* ---------------------------------------------------------------- breadcrumbs */
@@ -324,6 +337,12 @@ void navigate(App *a, GFile *dir, gboolean push, const char *select) {
         }
     } else {
         gtk_stack_set_visible_child_name(GTK_STACK(a->pages), "files");
+        /* apply per-directory view or fall back to global default */
+        if (a->dir_views) {
+            g_autofree char *uri = g_file_get_uri(t->dir);
+            const char *saved = g_hash_table_lookup(a->dir_views, uri);
+            view_apply_size(a, saved ? saved : a->row_size);
+        }
         GFile *old = gtk_directory_list_get_file(a->dirlist);
         if (!old || !g_file_equal(old, t->dir)) gtk_directory_list_set_file(a->dirlist, t->dir);
         else if (a->pending_select) view_try_pending(a);
@@ -668,6 +687,10 @@ static void act(GSimpleAction *action, GVariant *param, gpointer data) {
         g_list_free_full(sel, g_object_unref);
     } else if (g_str_equal(n, "choose")) {
         choose(a);
+    } else if (g_str_equal(n, "extract-here") || g_str_equal(n, "extract-into")) {
+        GList *sel = view_targets(a);
+        if (sel && !sel->next) extract_archive(a, sel->data, g_str_equal(n, "extract-into"));
+        g_list_free_full(sel, g_object_unref);
     } else if (g_str_equal(n, "cancel-pick") || g_str_equal(n, "quit")) {
         gtk_window_close(a->win);
     }
@@ -676,7 +699,7 @@ static void act(GSimpleAction *action, GVariant *param, gpointer data) {
 static const char *ACTIONS[] = {"back", "forward", "up", "refresh", "new-tab", "close-tab", "next-tab", "prev-tab",
                                 "address", "search", "toggle-hidden", "open", "open-tab", "cut", "copy", "paste",
                                 "copy-path", "rename", "trash", "new-folder", "new-file", "terminal", "undo", "redo", "choose",
-                                "cancel-pick", "quit", "pin", "unpin", "run-script"};
+                                "cancel-pick", "quit", "pin", "unpin", "run-script", "extract-here", "extract-into"};
 
 static void on_ext_run(GSimpleAction *act, GVariant *p, gpointer data) {
     (void)act;
@@ -822,9 +845,21 @@ void window_build(App *a, GFile *start) {
 
     GtkWidget *root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
 
+    /* tabbar: scrollable tab area + fixed "+" button */
+    GtkWidget *tabbar_outer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(tabbar_outer, "tabbar");
     a->tabbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
-    gtk_widget_add_css_class(a->tabbar, "tabbar");
-    gtk_box_append(GTK_BOX(root), a->tabbar);
+    a->tabbar_sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(a->tabbar_sw), GTK_POLICY_EXTERNAL, GTK_POLICY_NEVER);
+    gtk_widget_set_hexpand(a->tabbar_sw, TRUE);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(a->tabbar_sw), a->tabbar);
+    gtk_box_append(GTK_BOX(tabbar_outer), a->tabbar_sw);
+    GtkWidget *tab_plus = gtk_button_new_with_label("+");
+    gtk_widget_add_css_class(tab_plus, "glyph");
+    gtk_widget_set_tooltip_text(tab_plus, "New tab (Ctrl+T)");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(tab_plus), "win.new-tab");
+    gtk_box_append(GTK_BOX(tabbar_outer), tab_plus);
+    gtk_box_append(GTK_BOX(root), tabbar_outer);
 
     /* location bar */
     GtkWidget *nav = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
