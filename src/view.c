@@ -408,17 +408,14 @@ static void on_cell_click(GtkGestureClick *g, int n, double x, double y, gpointe
     GtkListItem *li = g_object_get_data(G_OBJECT(cell), "li");
     if (!li || !gtk_list_item_get_item(li)) return;
     gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
-    if (gtk_list_item_get_selected(li)) {
-        /* item is selected → show item context menu */
-        GList *targets = view_targets(a);
-        g_autoptr(GMenuModel) menu = build_item_menu(a, targets);
-        g_list_free_full(targets, g_object_unref);
-        popup_menu(a, menu, cell, x, y);
-    } else {
-        /* item is not selected → show folder/background menu without selecting item */
-        g_autoptr(GMenuModel) menu = build_empty_menu(a);
-        popup_menu(a, menu, cell, x, y);
-    }
+    /* right-click on an item outside the current selection replaces it; right-click
+     * within an existing multi-selection keeps it, so the item menu applies to all of it */
+    if (!gtk_list_item_get_selected(li))
+        gtk_selection_model_select_item(GTK_SELECTION_MODEL(a->sel), gtk_list_item_get_position(li), TRUE);
+    GList *targets = view_targets(a);
+    g_autoptr(GMenuModel) menu = build_item_menu(a, targets);
+    g_list_free_full(targets, g_object_unref);
+    popup_menu(a, menu, cell, x, y);
 }
 
 static void on_empty_click(GtkGestureClick *g, int n, double x, double y, gpointer data) {
