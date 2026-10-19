@@ -220,10 +220,33 @@ void view_try_pending(App *a) {
     if (find_name(a, name) >= 0) view_select_name(a, name, a->pending_rename);
 }
 
+/* the same GFileInfo is bound by both the details column view and the (hidden) tile grid:
+ * each keeps its own cell, and the one actually on screen is the mapped one */
+static GtkWidget *info_cell(GFileInfo *info) {
+    GtkWidget *c = g_object_get_data(G_OBJECT(info), "cell");
+    GtkWidget *t = g_object_get_data(G_OBJECT(info), "tcell");
+    if (c && gtk_widget_get_mapped(c)) return c;
+    if (t && gtk_widget_get_mapped(t)) return t;
+    return c ? c : t;
+}
+
 /* ---------------------------------------------------------------- rename in place */
 static void stack_show(GFileInfo *info, const char *page) {
-    GtkWidget *cell = g_object_get_data(G_OBJECT(info), "cell");
+    GtkWidget *cell = info_cell(info);
     if (cell) gtk_stack_set_visible_child_name(GTK_STACK(g_object_get_data(G_OBJECT(cell), "stack")), page);
+}
+
+/* runs after the context menu's popover has let go of focus */
+static gboolean rename_focus_idle(gpointer data) {
+    App *a = data;
+    if (!a->renaming) return G_SOURCE_REMOVE;
+    GtkWidget *cell = info_cell(a->renaming);
+    GtkWidget *entry = cell ? g_object_get_data(G_OBJECT(cell), "entry") : NULL;
+    if (!entry) return G_SOURCE_REMOVE;
+    gtk_widget_grab_focus(entry);
+    int end = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(entry), "rename-end"));
+    gtk_editable_select_region(GTK_EDITABLE(entry), 0, end);
+    return G_SOURCE_REMOVE;
 }
 
 void view_begin_rename(App *a) {
@@ -231,7 +254,7 @@ void view_begin_rename(App *a) {
     guint pos;
     g_autoptr(GFileInfo) info = view_focused(a, &pos);
     if (!info) return;
-    GtkWidget *cell = g_object_get_data(G_OBJECT(info), "cell");
+    GtkWidget *cell = info_cell(info);
     if (!cell) {
         scroll_to(a, pos, GTK_LIST_SCROLL_FOCUS);
         g_timeout_add(60, rename_idle, a);
@@ -242,10 +265,10 @@ void view_begin_rename(App *a) {
     gtk_editable_set_text(GTK_EDITABLE(entry), name);
     a->renaming = g_object_ref(info);
     stack_show(info, "entry");
-    gtk_widget_grab_focus(entry);
     const char *dot = info_is_dir(info) ? NULL : strrchr(name, '.');
     int end = dot && dot != name ? (int)g_utf8_pointer_to_offset(name, dot) : -1;
-    gtk_editable_select_region(GTK_EDITABLE(entry), 0, end);
+    g_object_set_data(G_OBJECT(entry), "rename-end", GINT_TO_POINTER(end));
+    g_timeout_add(100, rename_focus_idle, a);
 }
 
 static void renamed_cb(GObject *src, GAsyncResult *res, gpointer data) {
@@ -269,7 +292,7 @@ static void finish_rename(App *a, gboolean commit) {
     GFileInfo *info = a->renaming;
     if (!info) return;
     a->renaming = NULL;
-    GtkWidget *cell = g_object_get_data(G_OBJECT(info), "cell");
+    GtkWidget *cell = info_cell(info);
     g_autofree char *name = NULL;
     if (cell) name = g_strdup(gtk_editable_get_text(GTK_EDITABLE(g_object_get_data(G_OBJECT(cell), "entry"))));
     stack_show(info, "label");
@@ -483,7 +506,8 @@ static void name_setup(GtkSignalListItemFactory *f, GtkListItem *li, gpointer da
 }
 
 static void name_bind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer data) {
-    (void)f; (void)data;
+    (void)f;
+    App *a = data;
     GtkWidget *box = gtk_list_item_get_child(li);
     GFileInfo *info = gtk_list_item_get_item(li);
     GtkWidget *g = g_object_get_data(G_OBJECT(box), "glyph");
@@ -500,7 +524,9 @@ static void name_bind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer dat
     } else {
         gtk_label_set_text(GTK_LABEL(label), dname);
     }
-    gtk_stack_set_visible_child_name(GTK_STACK(g_object_get_data(G_OBJECT(box), "stack")), "label");
+    /* don't reset the stack to "label" while this cell is being renamed */
+    if (a->renaming != info)
+        gtk_stack_set_visible_child_name(GTK_STACK(g_object_get_data(G_OBJECT(box), "stack")), "label");
     g_object_set_data(G_OBJECT(info), "cell", box);
 }
 
@@ -661,9 +687,11 @@ static void tile_bind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer dat
     gtk_label_set_max_width_chars(GTK_LABEL(label), chars);
     g_autofree char *shown = info_is_dir(info) ? dir_display_name(info_file(info)) : NULL;
     gtk_label_set_text(GTK_LABEL(label), shown ? shown : g_file_info_get_display_name(info));
-    gtk_stack_set_visible_child_name(GTK_STACK(g_object_get_data(G_OBJECT(box), "stack")), "label");
+    /* don't reset the stack to "label" while this cell is being renamed */
+    if (a->renaming != info)
+        gtk_stack_set_visible_child_name(GTK_STACK(g_object_get_data(G_OBJECT(box), "stack")), "label");
     gtk_stack_set_visible_child_name(GTK_STACK(prev), "glyph");
-    g_object_set_data(G_OBJECT(info), "cell", box);
+    g_object_set_data(G_OBJECT(info), "tcell", box);
     ThumbReq *tr = g_new(ThumbReq, 1);
     tr->box = g_object_ref(box);
     tr->info = g_object_ref(info);
@@ -679,7 +707,7 @@ static void tile_unbind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer d
     g_object_set_data(G_OBJECT(box), "tkey", NULL);
     if (!info) return;
     if (a->renaming == info) finish_rename(a, FALSE);
-    if (g_object_get_data(G_OBJECT(info), "cell") == box) g_object_set_data(G_OBJECT(info), "cell", NULL);
+    if (g_object_get_data(G_OBJECT(info), "tcell") == box) g_object_set_data(G_OBJECT(info), "tcell", NULL);
 }
 
 /* ---------------------------------------------------------------- activation / keys */
