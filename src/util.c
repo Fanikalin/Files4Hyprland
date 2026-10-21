@@ -375,41 +375,61 @@ typedef struct {
     gboolean into_folder;
     gboolean open_after;
     gboolean ok;
-    gboolean tried; /* some extraction tool was installed */
-    char *folder_name; /* stem, set when into_folder */
+    gboolean tried;     /* some extraction tool was installed */
+    gboolean encrypted; /* a tool said the archive needs a password */
+    char *password;     /* NULL until the user typed one */
+    char *folder_name;  /* stem, set when into_folder */
 } ExtractJob;
 
 static void extract_free(ExtractJob *j) {
     g_object_unref(j->archive);
     g_object_unref(j->dest);
+    g_free(j->password);
     g_free(j->folder_name);
     g_free(j);
 }
 
-/* runs argv if its program is installed; *tried records that some tool was there */
-static gboolean try_tool(const char **argv, gboolean *tried) {
+/* runs argv if its program is installed; *tried records that some tool was there.
+ * stdin is /dev/null so a password prompt fails instead of hanging. */
+static gboolean try_tool(ExtractJob *j, const char **argv) {
     if (!tool_avail(argv[0])) return FALSE;
-    *tried = TRUE;
+    j->tried = TRUE;
     int st = -1;
-    g_spawn_sync(NULL, (char **)argv, NULL,
-                 G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
-                 NULL, NULL, NULL, NULL, &st, NULL);
-    return st == 0;
+    g_autofree char *out = NULL, *err = NULL;
+    g_spawn_sync(NULL, (char **)argv, NULL, G_SPAWN_SEARCH_PATH | G_SPAWN_STDIN_FROM_DEV_NULL,
+                 NULL, NULL, &out, &err, &st, NULL);
+    if (st == 0) return TRUE;
+    g_autofree char *msg = g_strconcat(out ? out : "", err ? err : "", NULL);
+    g_autofree char *low = g_ascii_strdown(msg, -1);
+    static const char *hints[] = {"password", "passphrase", "encrypted", NULL};
+    for (const char **h = hints; *h; h++)
+        if (strstr(low, *h)) j->encrypted = TRUE;
+    return FALSE;
 }
 
-static gboolean run_extract(const char *path, const char *dest, gboolean *tried) {
+static gboolean run_extract(ExtractJob *j, const char *path, const char *dest) {
+    /* without a password give the tools one that can't match: they fail fast instead of prompting */
+    const char *pw = j->password ? j->password : "\x01";
     g_autofree char *oarg = g_strdup_printf("-o%s", dest);
-    const char *unar[] = {"unar", "-D", "-force-overwrite", "-o", dest, path, NULL};
-    const char *sz[] = {"7z", "x", "-y", path, oarg, NULL};
-    const char *szz[] = {"7zz", "x", "-y", path, oarg, NULL};
-    /* libarchive: zip, 7z, rar (incl. v5), iso, cpio and every tar flavour */
-    const char *bsdtar[] = {"bsdtar", "-xf", path, "-C", dest, NULL};
+    g_autofree char *parg = g_strdup_printf("-p%s", pw);
+    const char *unar[] = {"unar", "-D", "-force-overwrite", "-p", pw, "-o", dest, path, NULL};
+    const char *sz[] = {"7z", "x", "-y", "-bso0", "-bsp0", parg, path, oarg, NULL};
+    const char *szz[] = {"7zz", "x", "-y", "-bso0", "-bsp0", parg, path, oarg, NULL};
+    /* libarchive: zip, 7z, rar (incl. v5), iso, cpio and every tar flavour; decrypts zip only */
+    const char *bsdtar[] = {"bsdtar", "-xf", path, "-C", dest, "--passphrase", pw, NULL};
     const char *tar[] = {"tar", "-xf", path, "-C", dest, NULL};
-    const char *unzip[] = {"unzip", "-o", path, "-d", dest, NULL};
+    const char *unzip[] = {"unzip", "-o", "-P", pw, path, "-d", dest, NULL};
     const char **tools[] = {unar, sz, szz, bsdtar, tar, unzip, NULL};
     for (const char ***t = tools; *t; t++)
-        if (try_tool(*t, tried)) return TRUE;
+        if (try_tool(j, *t)) return TRUE;
     return FALSE;
+}
+
+/* only these decrypt rar and 7z; zip also works with unzip and bsdtar */
+static gboolean can_decrypt(GFile *archive) {
+    if (tool_avail("unar") || tool_avail("7z") || tool_avail("7zz")) return TRUE;
+    g_autofree char *name = g_file_get_basename(archive);
+    return g_str_has_suffix(name, ".zip") && (tool_avail("unzip") || tool_avail("bsdtar"));
 }
 
 static void extract_thread(GTask *task, gpointer src, gpointer data, GCancellable *c) {
@@ -427,16 +447,95 @@ static void extract_thread(GTask *task, gpointer src, gpointer data, GCancellabl
         g_task_return_boolean(task, FALSE);
         return;
     }
-    j->ok = run_extract(path, dest, &j->tried);
+    j->ok = j->tried = j->encrypted = FALSE;
+    j->ok = run_extract(j, path, dest);
     if (!j->ok && j->into_folder) g_file_delete(j->dest, NULL, NULL); /* only goes if left empty */
     g_task_return_boolean(task, TRUE);
+}
+
+static void extract_start(ExtractJob *j);
+
+/* ---------------------------------------------------------------- password prompt */
+static void pw_close(GtkWidget *win, ExtractJob *j, gboolean go) {
+    if (go) {
+        GtkWidget *e = g_object_get_data(G_OBJECT(win), "entry");
+        g_free(j->password);
+        j->password = g_strdup(gtk_editable_get_text(GTK_EDITABLE(e)));
+        extract_start(j);
+    } else {
+        extract_free(j);
+    }
+    g_object_set_data(G_OBJECT(win), "job", NULL);
+    gtk_window_destroy(GTK_WINDOW(win));
+}
+
+static void pw_ok(GtkWidget *w, gpointer win) { pw_close(win, g_object_get_data(win, "job"), TRUE); }
+static void pw_cancel(GtkWidget *w, gpointer win) { pw_close(win, g_object_get_data(win, "job"), FALSE); }
+
+static gboolean pw_close_request(GtkWindow *win, gpointer data) {
+    ExtractJob *j = g_object_get_data(G_OBJECT(win), "job");
+    if (j) {
+        g_object_set_data(G_OBJECT(win), "job", NULL);
+        extract_free(j);
+    }
+    return FALSE;
+}
+
+static void ask_password(ExtractJob *j, gboolean retry) {
+    GtkWidget *win = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(win), "Password");
+    gtk_window_set_modal(GTK_WINDOW(win), TRUE);
+    gtk_window_set_transient_for(GTK_WINDOW(win), j->a->win);
+    gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
+    g_object_set_data(G_OBJECT(win), "job", j);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_margin_start(box, 16);
+    gtk_widget_set_margin_end(box, 16);
+    gtk_widget_set_margin_top(box, 16);
+    gtk_widget_set_margin_bottom(box, 16);
+    g_autofree char *name = g_file_get_basename(j->archive);
+    g_autofree char *text = g_strdup_printf(retry ? "Wrong password for “%s”. Try again:" : "“%s” is password-protected:", name);
+    GtkWidget *l = gtk_label_new(text);
+    gtk_label_set_xalign(GTK_LABEL(l), 0);
+    gtk_label_set_wrap(GTK_LABEL(l), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(l), 40);
+    GtkWidget *e = gtk_password_entry_new();
+    gtk_password_entry_set_show_peek_icon(GTK_PASSWORD_ENTRY(e), TRUE);
+    g_object_set_data(G_OBJECT(win), "entry", e);
+    g_signal_connect(e, "activate", G_CALLBACK(pw_ok), win);
+
+    GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_add_css_class(bar, "actions");
+    gtk_widget_set_halign(bar, GTK_ALIGN_END);
+    GtkWidget *cancel = gtk_button_new_with_label("Cancel");
+    GtkWidget *ok = gtk_button_new_with_label("Extract");
+    gtk_widget_add_css_class(ok, "suggested");
+    g_signal_connect(cancel, "clicked", G_CALLBACK(pw_cancel), win);
+    g_signal_connect(ok, "clicked", G_CALLBACK(pw_ok), win);
+    gtk_box_append(GTK_BOX(bar), cancel);
+    gtk_box_append(GTK_BOX(bar), ok);
+
+    gtk_box_append(GTK_BOX(box), l);
+    gtk_box_append(GTK_BOX(box), e);
+    gtk_box_append(GTK_BOX(box), bar);
+    gtk_window_set_child(GTK_WINDOW(win), box);
+    g_signal_connect(win, "close-request", G_CALLBACK(pw_close_request), NULL);
+    gtk_window_present(GTK_WINDOW(win));
+    gtk_widget_grab_focus(e);
 }
 
 static void extract_done(GObject *src, GAsyncResult *res, gpointer data) {
     (void)src;
     ExtractJob *j = data;
     gboolean completed = g_task_propagate_boolean(G_TASK(res), NULL);
-    if (!completed || !j->ok) {
+    if (completed && !j->ok && j->encrypted) {
+        if (can_decrypt(j->archive)) {
+            ask_password(j, j->password != NULL);
+            return;
+        }
+        toast(j->a, "The archive is password-protected — install 7zip or unar to extract it");
+    } else if (!completed || !j->ok) {
         toast(j->a, !completed || j->tried ? "Extraction failed" : "No extraction tool found — install unar or 7zip");
     } else {
         toast(j->a, "Extracted successfully");
@@ -444,6 +543,12 @@ static void extract_done(GObject *src, GAsyncResult *res, gpointer data) {
         else if (j->folder_name) view_select_name(j->a, j->folder_name, FALSE);
     }
     extract_free(j);
+}
+
+static void extract_start(ExtractJob *j) {
+    g_autoptr(GTask) task = g_task_new(NULL, NULL, extract_done, j);
+    g_task_set_task_data(task, j, NULL);
+    g_task_run_in_thread(task, extract_thread);
 }
 
 void extract_archive(App *a, GFile *archive, gboolean into_folder, gboolean open_after) {
@@ -464,9 +569,7 @@ void extract_archive(App *a, GFile *archive, gboolean into_folder, gboolean open
         g_autoptr(GFile) parent = g_file_get_parent(archive);
         j->dest = g_object_ref(parent ? parent : t->dir);
     }
-    g_autoptr(GTask) task = g_task_new(NULL, NULL, extract_done, j);
-    g_task_set_task_data(task, j, NULL);
-    g_task_run_in_thread(task, extract_thread);
+    extract_start(j);
 }
 
 /* ---------------------------------------------------------------- settings */
