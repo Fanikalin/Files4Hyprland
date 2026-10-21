@@ -66,7 +66,8 @@ Without the repository you can still install a single release by hand (no automa
 download `files4hyprland-*.pkg.tar.zst` from the [latest release](https://github.com/Fanikalin/Files4Hyprland/releases/latest)
 and run `sudo pacman -U ./files4hyprland-*.pkg.tar.zst`.
 
-**Files** appears in the application menu. To also make it the default folder handler, add
+**Files** appears in the application menu. To also make it the default folder handler (including
+"Show in folder" from browsers and other apps, with the file selected), add
 `SUPER+SHIFT+F` (Omarchy) and use it as the file-chooser dialog, run once as your user:
 
 ```bash

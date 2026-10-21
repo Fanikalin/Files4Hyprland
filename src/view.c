@@ -595,14 +595,17 @@ static GtkColumnViewColumn *add_column(App *a, const char *title, GCallback setu
 typedef struct {
     GtkWidget *box;
     GFileInfo *info;
+    GtkListItem *li; /* weak: list items die when the grid model is reset */
     int req;
 } ThumbReq;
 
 static gboolean do_deferred_thumb(gpointer data) {
     ThumbReq *r = data;
-    GtkListItem *li = g_object_get_data(G_OBJECT(r->box), "li");
-    if (li && gtk_list_item_get_item(li) == (gpointer)r->info)
-        thumb_load(r->box, r->info, r->req);
+    if (r->li) {
+        g_object_remove_weak_pointer(G_OBJECT(r->li), (gpointer *)&r->li);
+        if (gtk_list_item_get_child(r->li) == r->box && gtk_list_item_get_item(r->li) == (gpointer)r->info)
+            thumb_load(r->box, r->info, r->req);
+    }
     g_object_unref(r->box);
     g_object_unref(r->info);
     g_free(r);
@@ -695,6 +698,8 @@ static void tile_bind(GtkSignalListItemFactory *f, GtkListItem *li, gpointer dat
     ThumbReq *tr = g_new(ThumbReq, 1);
     tr->box = g_object_ref(box);
     tr->info = g_object_ref(info);
+    tr->li = li;
+    g_object_add_weak_pointer(G_OBJECT(li), (gpointer *)&tr->li);
     tr->req = req;
     g_idle_add_full(G_PRIORITY_LOW, do_deferred_thumb, tr, NULL);
 }

@@ -58,12 +58,14 @@ static void on_activate(GtkApplication *gapp, gpointer data) {
 int main(int argc, char **argv) {
     const char *pick = NULL;
     gboolean version = FALSE;
+    gboolean fm1 = FALSE;
     GOptionEntry entries[] = {
         {"pick", 0, 0, G_OPTION_ARG_STRING, &pick, "File chooser mode: file, files, dir or save", "MODE"},
         {"out", 0, 0, G_OPTION_ARG_FILENAME, &app.pick_out, "Write chosen paths here, one per line", "FILE"},
         {"name", 0, 0, G_OPTION_ARG_STRING, &app.pick_name, "Suggested file name for --pick save", "NAME"},
         {"search", 0, 0, G_OPTION_ARG_STRING, &search_arg, "Search this folder and its subfolders", "TEXT"},
         {"version", 0, 0, G_OPTION_ARG_NONE, &version, "Print the version", NULL},
+        {"filemanager1", 0, G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, &fm1, "Serve org.freedesktop.FileManager1 (D-Bus activated)", NULL},
         {NULL, 0, 0, 0, NULL, NULL, NULL},
     };
     g_autoptr(GOptionContext) ctx = g_option_context_new("[PATH]");
@@ -78,6 +80,7 @@ int main(int argc, char **argv) {
         g_print("files4hyprland %s\n", F4H_VERSION);
         return 0;
     }
+    if (fm1) return fm1_service_run();
     if (pick) {
         if (g_str_equal(pick, "file")) app.pick = PICK_FILE;
         else if (g_str_equal(pick, "files")) app.pick = PICK_FILES;

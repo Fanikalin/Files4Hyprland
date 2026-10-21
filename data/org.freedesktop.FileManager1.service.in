@@ -1,0 +1,4 @@
+# files4hyprland
+[D-BUS Service]
+Name=org.freedesktop.FileManager1
+Exec=@BINDIR@/files4hyprland --filemanager1

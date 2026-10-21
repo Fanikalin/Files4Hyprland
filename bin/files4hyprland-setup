@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Per-user integration for Files4Hyprland. Everything it adds is marked and can be undone.
-#   --default  make it the default folder handler
+#   --default  make it the default folder handler and the "Show in folder" target of other apps
 #   --hypr     add SUPER+SHIFT+F bindings and a floating rule (Omarchy/Hyprland)
 #   --portal   use it as the system "choose a file" dialog (needs xdg-desktop-portal-termfilechooser)
 #   --all      all of the above
@@ -16,6 +16,7 @@ P="$HOME/.config/xdg-desktop-portal-termfilechooser"
 desk="$(echo "${XDG_CURRENT_DESKTOP:-Hyprland}" | cut -d: -f1 | tr '[:upper:]' '[:lower:]')"
 PC="$HOME/.config/xdg-desktop-portal/${desk}-portals.conf"
 MIME="$HOME/.config/mimeapps.list"
+FM1="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services/org.freedesktop.FileManager1.service"
 
 DEFAULT=0; HYPR=0; PORTAL=0; UNDO=0; QUIET=0; REFRESH=0
 for a in "$@"; do
@@ -37,12 +38,16 @@ add_block() {  # file snippet (replaces an older block)
 del_block() {  # file
   [ -f "$1" ] && grep -qF -- "$BEGIN" "$1" && sed -i "\#^$BEGIN#,\#^$END#d" "$1" || true
 }
+dbus_reload() {  # make the session bus see added/removed service files
+  busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
+}
 owned() { [ -f "$1" ] && grep -q '^# files4hyprland' "$1"; }
 
 if [ "$UNDO" = 1 ]; then
   del_block "$H/bindings.lua"; del_block "$H/looknfeel.lua"
   owned "$P/config" && rm -f "$P/config" "$P/files4hyprland-wrapper.sh" "$P/files-tui-wrapper.sh"
   owned "$PC" && rm -f "$PC"
+  owned "$FM1" && rm -f "$FM1" && dbus_reload
   if [ -f "$MIME" ] && grep -q '^inode/directory=files4hyprland.desktop' "$MIME"; then
     sed -i '/^inode\/directory=files4hyprland.desktop/d' "$MIME"
   fi
@@ -60,6 +65,9 @@ fi
 
 if [ "$DEFAULT" = 1 ]; then
   xdg-mime default files4hyprland.desktop inode/directory
+  # the user services dir wins over another file manager's system-wide FileManager1
+  install -Dm644 "$SHARE/dbus/org.freedesktop.FileManager1.service" "$FM1"
+  dbus_reload
   say "Default folder handler: Files."
 fi
 

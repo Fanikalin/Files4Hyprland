@@ -141,6 +141,9 @@ gboolean is_network(GFile *f);
 void net_open(App *a, GFile *f);   /* mounts if needed, then navigates */
 guint network_count(void);
 
+/* fm1.c: headless org.freedesktop.FileManager1 service ("Show in folder" from other apps) */
+int fm1_service_run(void);
+
 /* ext.c: entries other programs add to the context menu */
 GMenuModel *ext_menu_build(App *a, GList *targets); /* NULL when there is nothing to add */
 void ext_run(App *a, guint index);
