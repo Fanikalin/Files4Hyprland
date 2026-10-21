@@ -74,6 +74,17 @@ static void launched(GObject *src, GAsyncResult *res, gpointer data) {
 }
 
 void open_file(App *a, GFile *file) {
+    /* an archive nothing else opens: extract it into a folder next to it */
+    g_autofree char *name = g_file_get_basename(file);
+    if (g_file_is_native(file) && name_is_archive(name)) {
+        g_autoptr(GFileInfo) info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE, 0, NULL, NULL);
+        const char *type = info ? g_file_info_get_content_type(info) : NULL;
+        g_autoptr(GAppInfo) app = type ? g_app_info_get_default_for_type(type, FALSE) : NULL;
+        if (!app) {
+            extract_archive(a, file, TRUE, TRUE);
+            return;
+        }
+    }
     g_autofree char *uri = g_file_get_uri(file);
     g_autoptr(GdkAppLaunchContext) ctx = gdk_display_get_app_launch_context(gdk_display_get_default());
     g_app_info_launch_default_for_uri_async(uri, G_APP_LAUNCH_CONTEXT(ctx), NULL, launched, a);
@@ -362,7 +373,9 @@ typedef struct {
     GFile *archive;
     GFile *dest;
     gboolean into_folder;
+    gboolean open_after;
     gboolean ok;
+    gboolean tried; /* some extraction tool was installed */
     char *folder_name; /* stem, set when into_folder */
 } ExtractJob;
 
@@ -373,37 +386,29 @@ static void extract_free(ExtractJob *j) {
     g_free(j);
 }
 
-static gboolean run_extract(const char *path, const char *dest) {
+/* runs argv if its program is installed; *tried records that some tool was there */
+static gboolean try_tool(const char **argv, gboolean *tried) {
+    if (!tool_avail(argv[0])) return FALSE;
+    *tried = TRUE;
     int st = -1;
-    if (tool_avail("unar")) {
-        const char *argv[] = {"unar", "-D", "-force-overwrite", "-o", dest, path, NULL};
-        g_spawn_sync(NULL, (char **)argv, NULL,
-                     G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
-                     NULL, NULL, NULL, NULL, &st, NULL);
-        if (st == 0) return TRUE;
-    }
-    if (tool_avail("7z")) {
-        g_autofree char *oarg = g_strdup_printf("-o%s", dest);
-        const char *argv[] = {"7z", "x", "-y", path, oarg, NULL};
-        g_spawn_sync(NULL, (char **)argv, NULL,
-                     G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
-                     NULL, NULL, NULL, NULL, &st, NULL);
-        if (st == 0) return TRUE;
-    }
-    if (tool_avail("tar")) {
-        const char *argv[] = {"tar", "-xf", path, "-C", dest, NULL};
-        g_spawn_sync(NULL, (char **)argv, NULL,
-                     G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
-                     NULL, NULL, NULL, NULL, &st, NULL);
-        if (st == 0) return TRUE;
-    }
-    if (tool_avail("unzip")) {
-        const char *argv[] = {"unzip", "-o", path, "-d", dest, NULL};
-        g_spawn_sync(NULL, (char **)argv, NULL,
-                     G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
-                     NULL, NULL, NULL, NULL, &st, NULL);
-        if (st == 0) return TRUE;
-    }
+    g_spawn_sync(NULL, (char **)argv, NULL,
+                 G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                 NULL, NULL, NULL, NULL, &st, NULL);
+    return st == 0;
+}
+
+static gboolean run_extract(const char *path, const char *dest, gboolean *tried) {
+    g_autofree char *oarg = g_strdup_printf("-o%s", dest);
+    const char *unar[] = {"unar", "-D", "-force-overwrite", "-o", dest, path, NULL};
+    const char *sz[] = {"7z", "x", "-y", path, oarg, NULL};
+    const char *szz[] = {"7zz", "x", "-y", path, oarg, NULL};
+    /* libarchive: zip, 7z, rar (incl. v5), iso, cpio and every tar flavour */
+    const char *bsdtar[] = {"bsdtar", "-xf", path, "-C", dest, NULL};
+    const char *tar[] = {"tar", "-xf", path, "-C", dest, NULL};
+    const char *unzip[] = {"unzip", "-o", path, "-d", dest, NULL};
+    const char **tools[] = {unar, sz, szz, bsdtar, tar, unzip, NULL};
+    for (const char ***t = tools; *t; t++)
+        if (try_tool(*t, tried)) return TRUE;
     return FALSE;
 }
 
@@ -422,7 +427,8 @@ static void extract_thread(GTask *task, gpointer src, gpointer data, GCancellabl
         g_task_return_boolean(task, FALSE);
         return;
     }
-    j->ok = run_extract(path, dest);
+    j->ok = run_extract(path, dest, &j->tried);
+    if (!j->ok && j->into_folder) g_file_delete(j->dest, NULL, NULL); /* only goes if left empty */
     g_task_return_boolean(task, TRUE);
 }
 
@@ -431,21 +437,23 @@ static void extract_done(GObject *src, GAsyncResult *res, gpointer data) {
     ExtractJob *j = data;
     gboolean completed = g_task_propagate_boolean(G_TASK(res), NULL);
     if (!completed || !j->ok) {
-        toast(j->a, j->ok ? "Extraction failed" : "No extraction tool found — install unar, 7z or tar");
+        toast(j->a, !completed || j->tried ? "Extraction failed" : "No extraction tool found — install unar or 7zip");
     } else {
         toast(j->a, "Extracted successfully");
-        if (j->folder_name) view_select_name(j->a, j->folder_name, FALSE);
+        if (j->open_after) navigate(j->a, j->dest, TRUE, NULL);
+        else if (j->folder_name) view_select_name(j->a, j->folder_name, FALSE);
     }
     extract_free(j);
 }
 
-void extract_archive(App *a, GFile *archive, gboolean into_folder) {
+void extract_archive(App *a, GFile *archive, gboolean into_folder, gboolean open_after) {
     Tab *t = cur_tab(a);
     if (!t) return;
     ExtractJob *j = g_new0(ExtractJob, 1);
     j->a = a;
     j->archive = g_object_ref(archive);
     j->into_folder = into_folder;
+    j->open_after = open_after;
     if (into_folder) {
         g_autofree char *name = g_file_get_basename(archive);
         g_autofree char *stem = archive_stem(name);

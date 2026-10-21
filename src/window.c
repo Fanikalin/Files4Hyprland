@@ -689,7 +689,7 @@ static void act(GSimpleAction *action, GVariant *param, gpointer data) {
         choose(a);
     } else if (g_str_equal(n, "extract-here") || g_str_equal(n, "extract-into")) {
         GList *sel = view_targets(a);
-        if (sel && !sel->next) extract_archive(a, sel->data, g_str_equal(n, "extract-into"));
+        if (sel && !sel->next) extract_archive(a, sel->data, g_str_equal(n, "extract-into"), FALSE);
         g_list_free_full(sel, g_object_unref);
     } else if (g_str_equal(n, "cancel-pick") || g_str_equal(n, "quit")) {
         gtk_window_close(a->win);

@@ -115,7 +115,7 @@ void run_script(App *a, GFile *file);
 void settings_load(App *a);
 void settings_save(App *a);
 gboolean name_is_archive(const char *filename); /* check by extension */
-void extract_archive(App *a, GFile *archive, gboolean into_folder);
+void extract_archive(App *a, GFile *archive, gboolean into_folder, gboolean open_after); /* open_after: go into the result */
 
 /* dnd.c */
 typedef GFile *(*DropDestFn)(App *a, GtkWidget *w);
